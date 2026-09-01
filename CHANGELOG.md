@@ -6,6 +6,27 @@ Valmis, aga serverisse veel viimata.
 
 ## Uus
 
+### Kõik mängud on nüüd kättesaadavad
+
+Paneeli valikumenüü näitab 25 mängu, sest rohkem Discordi menüüsse ei mahu.
+Serveris on neid **230**. Ülejäänud 205 ei olnud varem ühelgi viisil lisatavad.
+
+Nüüd on kaks teed nendeni:
+
+**Sirvi kõiki mänge** — uus nupp paneelil. Avab kogu serveri kataloogi sama
+nimekirjana, mida sa juba tunned importimisest: iga mäng oma real, oma
+linnukesega, 10 mängu lehel. Valik püsib lehtede vahel ja salvestad lõpus korra.
+
+**`/games add game:`** — hakka kirjutama ja bot pakub vasteid kohe, sama moodi
+nagu `/games who` juures. Vali nimi, mäng on lisatud. Kolm tähte ja valmis.
+
+Otsing ei hooli suur- ja väiketähtedest ega täppidest: „pokemon" leiab
+„Pokémon". Sulle ei pakuta mänge, mis sul juba olemas on, ega neid, mille
+omanik on selle peitnud.
+
+Vana 25-mänguline menüü jääb alles — see vastab küsimusele, mida siin serveris
+kõige rohkem mängitakse.
+
 ### Kopeeri pingid — `/games who`
 
 Mängu juures on nüüd nupp **Kopeeri pingid**. See annab sulle kõigi mängijate

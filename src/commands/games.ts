@@ -17,6 +17,8 @@ import {
   guildGameMeta,
   listGames,
   searchGamesForAutocomplete,
+  searchGuildCatalog,
+  addUserGame,
   sharedGames,
   whoOwns,
   ensureUser,
@@ -79,6 +81,16 @@ const data = new SlashCommandBuilder()
     s
       .setName('add')
       .setDescription('Lisa mänge oma nimekirja — Steamist või mujalt')
+      // The fast path. Type three letters, pick, done -- no panel, no paging.
+      // Leaving it empty opens the panel exactly as before.
+      .addStringOption((o) =>
+        o
+          .setName('game')
+          .setDescription('Lisa üks kindel mäng kohe. Tühjaks jättes avaneb paneel.')
+          .setRequired(false)
+          .setAutocomplete(true)
+          .setMaxLength(LIMITS.choiceValue),
+      )
       .addUserOption((o) =>
         o
           .setName('user')
@@ -152,13 +164,25 @@ const command: Command = {
       return;
     }
     const query = (focused.value ?? '').toString().trim();
+    const guildId = interaction.guildId ?? '';
     try {
-      const rows = searchGamesForAutocomplete(
-        ctx.db,
-        interaction.guildId ?? '',
-        query,
-        ROW_LIMITS.autocomplete,
-      );
+      // The two subcommands ask different questions of the same catalogue.
+      // /games who asks "what does this server play", so every game counts.
+      // /games add asks "what could I claim", so the caller's own games are
+      // excluded -- offering back something already in your list is a dead end.
+      const forUser =
+        interaction.options.getSubcommand() === 'add'
+          // .get(), not .getUser(): an autocomplete payload carries the raw
+          // option value (the snowflake) and discord.js omits the resolving
+          // getters from AutocompleteInteraction for exactly that reason.
+          ? (typeof interaction.options.get('user')?.value === 'string'
+              ? String(interaction.options.get('user')?.value)
+              : interaction.user.id)
+          : null;
+      const rows =
+        forUser === null
+          ? searchGamesForAutocomplete(ctx.db, guildId, query, ROW_LIMITS.autocomplete)
+          : searchGuildCatalog(ctx.db, guildId, forUser, query, ROW_LIMITS.autocomplete);
       await interaction.respond(
         rows.slice(0, 25).map((g) => ({
           // Prototype screen 6 shows "<name> (N owners)" -- the count is the
@@ -186,7 +210,8 @@ const command: Command = {
 
     // Before the defer: /games who defers PUBLICLY, and a token refusal is a
     // private security message -- it must never be posted into the channel.
-    const rawGame = sub === 'who' ? (interaction.options.getString('game') ?? '') : '';
+    const rawGame =
+      sub === 'who' || sub === 'add' ? (interaction.options.getString('game') ?? '') : '';
     if (rawGame && (await refuseIfSteamToken(interaction, rawGame))) return;
 
     await interaction.deferReply(isPublic ? {} : { flags: MessageFlags.Ephemeral });
@@ -258,7 +283,77 @@ async function addSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
     touchGuildMember(ctx.db, interaction.guildId!, target.id);
   }
 
-  await openAddPanel(interaction, ctx, onBehalf ? target.id : actorId, min);
+  const forId = onBehalf ? target.id : actorId;
+
+  // The fast path: one named game, no panel. Empty falls through to the panel,
+  // which is still where importing, browsing and removing live.
+  const raw = (interaction.options.getString('game') ?? '').trim();
+  if (raw.length > 0) {
+    await addOneGame(interaction, ctx, interaction.guildId!, forId, raw, onBehalf);
+    return;
+  }
+
+  await openAddPanel(interaction, ctx, forId, min);
+}
+
+/**
+ * Resolve one typed/picked game and store it.
+ *
+ * Autocomplete sends the appid as the value, but nothing forces the user to pick
+ * a suggestion, so arbitrary text still has to resolve -- the same shape
+ * /games who deals with, and the same leading `-?`, because a hand-added game
+ * carries a synthetic NEGATIVE appid.
+ */
+async function addOneGame(
+  interaction: Inter,
+  ctx: Ctx,
+  guildId: string,
+  forId: string,
+  raw: string,
+  onBehalf: boolean,
+): Promise<void> {
+  let appid: number | null = null;
+  if (/^-?\d{1,10}$/.test(raw)) appid = Number.parseInt(raw, 10);
+
+  // guildGameMeta, not a global lookup: /games add must not become a way to
+  // confirm that a game exists somewhere in the bot's database. It offers what
+  // this guild visibly has, and resolves only that.
+  if (appid === null || guildGameMeta(ctx.db, guildId, appid) === null) {
+    const hits = searchGuildCatalog(ctx.db, guildId, forId, raw, 1);
+    appid = hits[0]?.appid ?? null;
+  }
+
+  const meta = appid === null ? null : guildGameMeta(ctx.db, guildId, appid);
+  if (appid === null || meta === null) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Ma ei tunne seda mängu',
+          `Kellelgi siin pole midagi, mis sobiks otsinguga **${gameName(raw, 60)}**.\n\nKui seda mängu pole veel keegi lisanud, tee seda paneelilt: **/games add** ilma \`game\` valikuta → **Lisa muu mäng**.`,
+          COLORS.warn,
+        ),
+      ],
+    });
+    return;
+  }
+
+  const added = addUserGame(ctx.db, forId, appid);
+  const label = gameName(meta.name, 80);
+  await interaction.editReply({
+    embeds: [
+      noticeEmbed(
+        added ? `Lisatud: ${label}` : `See oli juba olemas: ${label}`,
+        added
+          ? onBehalf
+            ? `Lisasin selle <@${forId}> nimekirja.`
+            : 'See on nüüd su nimekirjas. Vaata üle: **/games list**'
+          : onBehalf
+            ? `<@${forId}> nimekirjas oli see juba.`
+            : 'Su nimekirjas oli see juba olemas.',
+        added ? COLORS.ok : COLORS.warn,
+      ),
+    ],
+  });
 }
 
 /**

@@ -55,7 +55,7 @@ global commands are eventually consistent. Leave it unset to deploy globally.
 
 | Command | What it does |
 |---|---|
-| `/games add [user]` | **The panel.** Sync a Steam library, claim games other people here already added, add any other game, or quick-add Minecraft. `user` does it **for someone else** (needs Manage Server) |
+| `/games add [game] [user]` | `game` adds one named game straight away, with autocomplete over everything this server has that you do not. Empty opens **the panel**: sync a Steam library, pick from the 25 most-owned, **Sirvi kõiki mänge** for the whole catalogue as a checklist, add any other game, or quick-add Minecraft. `user` does it **for someone else** (needs Manage Server) |
 | `/steam update` | Re-read the profile and go through the import checklist again (15-minute cooldown) |
 | `/steam change` | Checklist of your games — untick the ones other people should not see |
 | `/steam unlink` | Delete the Steam link and everything imported from it. Hand-added games stay — they never came from Steam |

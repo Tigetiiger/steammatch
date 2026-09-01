@@ -37,6 +37,7 @@ import {
   userManualGames,
 } from '../db/queries.js';
 import { COLORS, addPanelEmbed, gameName, noticeEmbed } from '../ui/embeds.js';
+import { runChecklist } from '../ui/checklist.js';
 import { claimSessionId, releaseSession } from '../ui/paginate.js';
 import { importLibrary } from './steam.js';
 import { getLinkInfo, type BotContext } from './index.js';
@@ -52,7 +53,17 @@ export const QUICK_ADD_GAMES: ReadonlyArray<{ name: string; emoji: string }> = [
 
 const PANEL_IDLE_MS = 120_000;
 const PANEL_TIME_MS = 14 * 60_000;
+/**
+ * The select menu's cap, and Discord's: 25 options is all one holds. That is a
+ * shortlist of what the server plays most, NOT the catalogue -- the catalogue is
+ * reached through "Sirvi kõiki", which paginates and has no such ceiling.
+ */
 const CATALOG_LIMIT = 25;
+/**
+ * The browse-everything ceiling. The checklist holds its rows in memory and
+ * paginates ten to a page, so this bounds the message count, not the screen.
+ */
+const BROWSE_LIMIT = 1000;
 
 type Ctx = BotContext;
 
@@ -62,7 +73,8 @@ function counts(ctx: Ctx, userId: string) {
   return { steamCount: all.length - manualCount, manualCount };
 }
 
-function panelComponents(sid: string, catalog: { appid: number; name: string; owners: number }[]) {
+/** Exported so a test can hold the row layout to Discord's five-per-row cap. */
+export function panelComponents(sid: string, catalog: { appid: number; name: string; owners: number }[]) {
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
   if (catalog.length > 0) {
@@ -85,29 +97,44 @@ function panelComponents(sid: string, catalog: { appid: number; name: string; ow
     );
   }
 
-  const buttons = [
-    new ButtonBuilder()
-      .setCustomId(`gp:${sid}:steam`)
-      .setLabel('Impordi Steami kogu')
-      .setStyle(ButtonStyle.Primary),
-    ...QUICK_ADD_GAMES.map((q, i) =>
+  // TWO rows, not one. The primary actions used to share a row with the
+  // quick-add buttons under a .slice(0, 5), so adding a second entry to
+  // QUICK_ADD_GAMES would have silently dropped "Eemalda" off the end. Splitting
+  // them means the list can grow to five without eating anything.
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`gp:${sid}:quick${i}`)
-        .setLabel(q.name)
-        .setEmoji(q.emoji)
-        .setStyle(ButtonStyle.Success),
+        .setCustomId(`gp:${sid}:steam`)
+        .setLabel('Impordi Steami kogu')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`gp:${sid}:browse`)
+        .setLabel('Sirvi kõiki mänge')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`gp:${sid}:manual`)
+        .setLabel('Lisa muu mäng')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`gp:${sid}:remove`)
+        .setLabel('Eemalda')
+        .setStyle(ButtonStyle.Secondary),
     ),
-    new ButtonBuilder()
-      .setCustomId(`gp:${sid}:manual`)
-      .setLabel('Lisa muu mäng')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`gp:${sid}:remove`)
-      .setLabel('Eemalda')
-      .setStyle(ButtonStyle.Secondary),
-  ].slice(0, 5); // one action row, Discord's hard limit
+  );
 
-  rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons));
+  if (QUICK_ADD_GAMES.length > 0) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        ...QUICK_ADD_GAMES.slice(0, 5).map((q, i) =>
+          new ButtonBuilder()
+            .setCustomId(`gp:${sid}:quick${i}`)
+            .setLabel(q.name)
+            .setEmoji(q.emoji)
+            .setStyle(ButtonStyle.Success),
+        ),
+      ),
+    );
+  }
   return rows;
 }
 
@@ -162,6 +189,7 @@ export async function openAddPanel(
       if (!i.isButton()) return;
 
       if (action === 'steam') return handleSteam(i, ctx, targetId, min, render);
+      if (action === 'browse') return handleBrowse(i, ctx, guildId, targetId, render);
       if (action === 'manual') return handleManual(i, ctx, targetId, render);
       if (action === 'remove') return handleRemove(i, ctx, targetId, render);
 
@@ -233,6 +261,96 @@ async function handleSteam(
   await submit.deferReply({ flags: MessageFlags.Ephemeral });
   await importLibrary(submit, ctx, submit.fields.getTextInputValue('id_or_url').trim(), min, targetId);
   await i.editReply(render() as never).catch(() => {});
+}
+
+/**
+ * "Sirvi kõiki mänge" -- the whole guild catalogue, not the select menu's 25.
+ *
+ * The select menu can hold 25 options and the catalogue is already an order of
+ * magnitude past that, so everything below the top 25 was unreachable: not hard
+ * to find, but absent. This runs the SAME checklist the import screen and
+ * /steam change use, over the catalogue instead of a Steam library. Selection
+ * survives paging and everything is written in one go at the end.
+ *
+ * It gets its OWN deferred reply rather than taking over the panel's message:
+ * the panel has to stay where it is, because this is one action among several
+ * and the person is expected to come back to it.
+ */
+async function handleBrowse(
+  i: ButtonInteraction,
+  ctx: Ctx,
+  guildId: string,
+  targetId: string,
+  render: () => { embeds: unknown[]; components: unknown[] },
+): Promise<void> {
+  const catalog = guildCatalog(ctx.db, guildId, targetId, BROWSE_LIMIT);
+  if (catalog.length === 0) {
+    await i.reply({
+      embeds: [
+        noticeEmbed(
+          'Siin pole veel midagi sirvida',
+          'Sul on juba kõik mängud, mida teised siin on lisanud. Kui keegi impordib oma Steami kogu, tekib siia valikut.',
+          COLORS.warn,
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const review = await runChecklist({
+    interaction: i,
+    ownerId: i.user.id,
+    items: catalog.map((c) => ({
+      id: String(c.appid),
+      label: c.name,
+      note: `${c.owners} inimesel`,
+    })),
+    // Nothing pre-ticked: by construction these are games the person does NOT
+    // have, so a ticked box always means "add this", never "keep this".
+    initial: [],
+    title: 'Kõik selle serveri mängud',
+    intro: `Siin on **${catalog.length}** mängu, mis teistel siin juba on ja sul veel mitte. Märgi need, mida sa mängid — märgitud mängud lisatakse su nimekirja.`,
+    checkedMeans: 'lisatakse',
+    uncheckedMeans: 'ei lisata',
+    saveLabel: 'Lisa märgitud',
+  });
+
+  if (!review.saved) {
+    await i.editReply({
+      embeds: [
+        noticeEmbed('Midagi ei lisatud', 'Sulgesid nimekirja, nii et su mängud jäid samaks.', COLORS.warn),
+      ],
+      components: [],
+    });
+    return;
+  }
+
+  // Only appids this panel actually offered. review.checked can only hold ids
+  // from `items`, but the catalogue is re-read as the authority anyway rather
+  // than trusting a round trip through a custom_id.
+  const offered = new Map(catalog.map((c) => [String(c.appid), c]));
+  let added = 0;
+  for (const id of review.checked) {
+    const row = offered.get(id);
+    if (row && addUserGame(ctx.db, targetId, row.appid)) added++;
+  }
+
+  await i.editReply({
+    embeds: [
+      noticeEmbed(
+        added === 0 ? 'Midagi uut ei lisandunud' : `Lisatud: ${added} ${added === 1 ? 'mäng' : 'mängu'}`,
+        added === 0
+          ? 'Kõik märgitud mängud olid sul juba olemas.'
+          : 'Need on nüüd su nimekirjas. Vaata üle: **/games list**',
+        added === 0 ? COLORS.warn : COLORS.ok,
+      ),
+    ],
+    components: [],
+  });
+  await i.message.edit(render() as never).catch(() => {});
 }
 
 async function handleManual(

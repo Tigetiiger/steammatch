@@ -1,0 +1,608 @@
+<title>Mängude lisamise otsing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    /* Discord surfaces -- carried over verbatim from prototype/checklist.html
+       so all three mockups read as one system. */
+    --server-bg:#1e1f22; --side-bg:#2b2d31; --chat-bg:#313338; --embed-bg:#2b2d31;
+    --dtext:#dbdee1; --dtext-bright:#f2f3f5; --dtext-muted:#949ba4;
+    --blurple:#5865f2; --btn-secondary:#4e5058; --btn-success:#248046;
+    --divider:#3f4147; --input-bg:#1e1f22;
+
+    /* The bot's own COLORS constant, src/ui/embeds.ts */
+    --steam-blue:#66c0f4; --ok:#248046; --warn:#c9a35a; --err:#da373c;
+
+    /* Page ground: near-black pulled a few degrees toward the steam blue. */
+    --page:#131519; --panel:#181b20; --panel-2:#1d2127;
+    --ink:#e6e9ee; --ink-dim:#9aa4b2; --ink-faint:#6b7484;
+    --rule:#262b33;
+
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --dsans:"gg sans","Noto Sans",system-ui,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 24px 96px}
+
+  /* ---------- masthead ---------- */
+  .top{padding:56px 0 36px;border-bottom:1px solid var(--rule)}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--steam-blue);margin:0 0 14px}
+  h1{font-family:var(--sans);font-weight:700;font-size:38px;line-height:1.12;margin:0 0 16px;
+    letter-spacing:-.02em;text-wrap:balance;max-width:20ch}
+  .lede{max-width:66ch;color:var(--ink-dim);margin:0;font-size:16px}
+  .lede b{color:var(--ink);font-weight:600}
+
+  .facts{display:flex;flex-wrap:wrap;gap:0;margin:32px 0 0;border:1px solid var(--rule);
+    border-radius:4px;overflow:hidden;background:var(--panel)}
+  .fact{flex:1 1 150px;padding:14px 18px;border-right:1px solid var(--rule)}
+  .fact:last-child{border-right:0}
+  .fact .n{font-family:var(--mono);font-size:26px;font-weight:600;color:var(--ink);
+    font-variant-numeric:tabular-nums;line-height:1.1}
+  .fact .n.bad{color:var(--err)}
+  .fact .n.good{color:var(--steam-blue)}
+  .fact .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;
+    color:var(--ink-faint);margin-top:5px}
+
+  .task{margin:28px 0 0;padding:14px 18px;background:var(--panel-2);border-left:3px solid var(--warn);
+    border-radius:0 4px 4px 0;font-size:14px;color:var(--ink-dim);max-width:78ch}
+  .task b{color:var(--ink);font-weight:600}
+  .task code{font-family:var(--mono);font-size:13px;color:var(--warn)}
+
+  /* ---------- option block ---------- */
+  .opt{padding:52px 0;border-bottom:1px solid var(--rule)}
+  .opt-head{display:flex;align-items:baseline;gap:14px;margin:0 0 6px;flex-wrap:wrap}
+  .tag{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--page);
+    background:var(--steam-blue);padding:2px 9px;border-radius:3px;letter-spacing:.04em}
+  h2{font-family:var(--sans);font-size:25px;font-weight:600;margin:0;letter-spacing:-.015em}
+  .sub{color:var(--ink-dim);margin:0 0 26px;max-width:70ch;font-size:15px}
+
+  .band{display:grid;grid-template-columns:300px 1fr;gap:32px;align-items:start}
+  @media (max-width:900px){.band{grid-template-columns:1fr}}
+
+  .spec{border:1px solid var(--rule);border-radius:4px;background:var(--panel);overflow:hidden}
+  .spec dl{margin:0}
+  .spec .row{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;
+    border-bottom:1px solid var(--rule);font-size:13px}
+  .spec .row:last-child{border-bottom:0}
+  .spec dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-faint);margin:0;padding-top:2px;white-space:nowrap}
+  .spec dd{margin:0;text-align:right;color:var(--ink)}
+  .spec dd.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .yes{color:var(--ok)} .no{color:var(--err)} .part{color:var(--warn)}
+
+  .limits{margin:14px 0 0;padding:0;list-style:none;font-size:13.5px;color:var(--ink-dim)}
+  .limits li{padding:7px 0 7px 20px;position:relative;border-bottom:1px dotted var(--rule)}
+  .limits li:last-child{border-bottom:0}
+  .limits li::before{content:"—";position:absolute;left:0;color:var(--ink-faint);font-family:var(--mono)}
+  .limits li b{color:var(--ink);font-weight:600}
+
+  /* ---------- discord mock ---------- */
+  .mock{background:var(--chat-bg);border-radius:8px;padding:18px 20px 20px;
+    font-family:var(--dsans);color:var(--dtext);font-size:15px;line-height:1.375;
+    box-shadow:0 10px 34px rgba(0,0,0,.45);min-height:330px;position:relative}
+  .mock .botline{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .avatar{width:32px;height:32px;border-radius:50%;background:var(--blurple);flex:none;
+    display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff}
+  .who{font-weight:600;color:var(--dtext-bright);font-size:15px}
+  .badge{background:var(--blurple);color:#fff;font-size:10px;font-weight:600;padding:1px 4px;
+    border-radius:3px;letter-spacing:.02em}
+  .eph{color:var(--dtext-muted);font-size:12px;margin-left:auto;font-family:var(--dsans)}
+
+  .embed{border-left:4px solid var(--steam-blue);background:var(--embed-bg);border-radius:4px;
+    padding:12px 14px;margin:0 0 10px}
+  .embed .t{font-weight:600;color:var(--dtext-bright);margin-bottom:5px}
+  .embed .d{font-size:14px;color:var(--dtext)}
+  .embed .d b{color:var(--dtext-bright)}
+
+  .comps{display:flex;flex-direction:column;gap:8px}
+  .arow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .btn{font-family:var(--dsans);font-size:14px;font-weight:500;border:0;border-radius:3px;
+    padding:8px 14px;cursor:pointer;color:#fff;background:var(--btn-secondary);
+    transition:filter .12s ease;line-height:1.2}
+  .btn:hover{filter:brightness(1.16)}
+  .btn:focus-visible{outline:2px solid var(--steam-blue);outline-offset:2px}
+  .btn.primary{background:var(--blurple)}
+  .btn.success{background:var(--btn-success)}
+  .btn[disabled]{opacity:.42;cursor:not-allowed}
+  .btn.sq{padding:8px 11px;min-width:38px}
+
+  .select{background:var(--input-bg);border:1px solid #1e1f22;border-radius:4px;padding:9px 12px;
+    color:var(--dtext-muted);font-size:14px;cursor:pointer;display:flex;justify-content:space-between;
+    align-items:center;gap:10px;width:100%}
+  .select:hover{border-color:#4e5058}
+  .select .caret{color:var(--dtext-muted);font-size:11px}
+  .dd{background:var(--side-bg);border-radius:4px;margin-top:4px;max-height:250px;overflow-y:auto;
+    box-shadow:0 6px 20px rgba(0,0,0,.5)}
+  .dd .o{padding:8px 12px;cursor:pointer;display:flex;gap:9px;align-items:flex-start;font-size:14px}
+  .dd .o:hover{background:#35373c}
+  .dd .o .box{width:16px;height:16px;border:1px solid #6b7484;border-radius:3px;flex:none;margin-top:2px;
+    display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff}
+  .dd .o.on .box{background:var(--blurple);border-color:var(--blurple)}
+  .dd .o .nm{color:var(--dtext-bright)}
+  .dd .o .sub2{color:var(--dtext-muted);font-size:12px;display:block}
+  .dd .empty{padding:14px 12px;color:var(--dtext-muted);font-size:13px;text-align:center}
+
+  /* components-v2 checklist row */
+  .clrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #35373c}
+  .clrow:last-child{border-bottom:0}
+  .clrow .txt{flex:1;font-size:14px}
+  .clrow .txt .nm{color:var(--dtext-bright)}
+  .clrow .txt .mt{color:var(--dtext-muted);font-size:12px}
+  .clbox{background:var(--btn-secondary);border:0;border-radius:3px;color:#fff;font-size:14px;
+    padding:6px 10px;cursor:pointer;min-width:36px}
+  .clbox.on{background:var(--blurple)}
+  .container{border-left:4px solid var(--steam-blue);background:var(--embed-bg);border-radius:4px;
+    padding:6px 14px;margin-bottom:10px}
+
+  /* modal */
+  .modal{position:absolute;inset:0;background:rgba(0,0,0,.72);border-radius:8px;display:flex;
+    align-items:center;justify-content:center;padding:20px;z-index:5}
+  .modal .sheet{background:var(--chat-bg);border-radius:6px;width:100%;max-width:420px;
+    box-shadow:0 12px 40px rgba(0,0,0,.6);overflow:hidden}
+  .modal .sheet h4{margin:0;padding:16px;font-size:17px;color:var(--dtext-bright);font-weight:600}
+  .modal .sheet .body{padding:0 16px 16px}
+  .modal label{display:block;font-size:11px;font-weight:700;letter-spacing:.02em;
+    color:var(--dtext-muted);text-transform:uppercase;margin-bottom:7px}
+  .modal input{width:100%;background:var(--input-bg);border:1px solid #1e1f22;border-radius:3px;
+    padding:10px;color:var(--dtext-bright);font-size:15px;font-family:var(--dsans)}
+  .modal input:focus{outline:0;border-color:var(--blurple)}
+  .modal .foot{background:var(--side-bg);padding:14px 16px;display:flex;justify-content:flex-end;gap:8px}
+
+  /* slash command bar */
+  .cmdbar{background:var(--input-bg);border-radius:8px;padding:11px 14px;display:flex;gap:9px;
+    align-items:center;font-size:15px}
+  .cmdbar .slash{background:var(--blurple);color:#fff;border-radius:3px;padding:1px 6px;font-size:13px;
+    font-weight:500}
+  .cmdbar .opt2{background:#404249;border-radius:3px;padding:1px 6px;font-size:13px;color:var(--dtext-bright)}
+  .cmdbar input{flex:1;background:transparent;border:0;color:var(--dtext-bright);font-size:15px;
+    font-family:var(--dsans);outline:0;min-width:60px}
+  .acbar{background:var(--side-bg);border-radius:8px;margin-bottom:6px;overflow:hidden;
+    box-shadow:0 6px 20px rgba(0,0,0,.5)}
+  .acbar .hd{padding:9px 14px;font-size:11px;font-weight:700;letter-spacing:.02em;
+    color:var(--dtext-muted);text-transform:uppercase;border-bottom:1px solid #35373c}
+  .acbar .list{max-height:212px;overflow-y:auto}
+  .acbar .o{padding:8px 14px;cursor:pointer;font-size:14px;display:flex;justify-content:space-between;gap:10px}
+  .acbar .o:hover,.acbar .o.sel{background:#35373c}
+  .acbar .o .nm{color:var(--dtext-bright)}
+  .acbar .o .ct{color:var(--dtext-muted);font-size:12.5px;font-family:var(--mono)}
+
+  /* counter strip under each mock */
+  .meter{display:flex;gap:0;margin-top:12px;border:1px solid var(--rule);border-radius:4px;
+    overflow:hidden;background:var(--panel)}
+  .meter div{flex:1;padding:9px 13px;border-right:1px solid var(--rule)}
+  .meter div:last-child{border-right:0}
+  .meter .mk{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+    color:var(--ink-faint)}
+  .meter .mv{font-family:var(--mono);font-size:17px;font-weight:600;color:var(--ink);
+    font-variant-numeric:tabular-nums;margin-top:2px}
+  .meter .mv.done{color:var(--ok)}
+  .reset{background:none;border:1px solid var(--rule);color:var(--ink-faint);font-family:var(--mono);
+    font-size:11px;padding:4px 10px;border-radius:3px;cursor:pointer;margin-top:10px}
+  .reset:hover{color:var(--ink);border-color:var(--ink-faint)}
+
+  /* ---------- verdict table ---------- */
+  .cmp{margin:52px 0 0;overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:660px;font-size:13.5px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--rule)}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-faint);font-weight:500;border-bottom:1px solid var(--ink-faint)}
+  td.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:var(--panel)}
+  td .nm{font-weight:600;color:var(--ink)}
+
+  .rec{margin:40px 0 0;padding:22px 24px;background:var(--panel);border:1px solid var(--rule);
+    border-left:3px solid var(--ok);border-radius:0 4px 4px 0}
+  .rec h3{margin:0 0 10px;font-size:17px;font-weight:600}
+  .rec p{margin:0 0 12px;color:var(--ink-dim);max-width:74ch}
+  .rec p:last-child{margin-bottom:0}
+  .rec b{color:var(--ink)}
+  code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);padding:1px 5px;
+    border-radius:3px;color:var(--steam-blue)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <p class="eyebrow">SteamMatch · /games add · valikud</p>
+  <h1>Kuidas jõuda kõigi mängudeni</h1>
+  <p class="lede">Paneeli valikumenüü näitab <b>25 mängu</b>, sest nii palju mahub Discordi
+  valikumenüüsse. Selles serveris on <b>230 mängu</b>. Ülejäänud 205 ei ole ühegi klikiga
+  kättesaadavad — neid lihtsalt ei ole olemas, kui sa ei tea, et neid otsida.
+  Allpool on neli võimalust, kõik päris andmetega ja klikitavad.</p>
+
+  <div class="facts">
+    <div class="fact"><div class="n">230</div><div class="k">mängu serveris</div></div>
+    <div class="fact"><div class="n">25</div><div class="k">praegu nähtav</div></div>
+    <div class="fact"><div class="n bad">205</div><div class="k">kättesaamatu</div></div>
+    <div class="fact"><div class="n good">11</div><div class="k">liiget</div></div>
+    <div class="fact"><div class="n">+20</div><div class="k">iga uue liikmega</div></div>
+  </div>
+
+  <p class="task"><b>Ülesanne igas variandis:</b> lisa endale
+  <code>Hollow Knight</code>, <code>Stellaris</code> ja <code>Celeste</code>.
+  Ükski neist ei ole 25 populaarseima seas, ehk praeguse paneeliga ei saa neid üldse lisada.
+  Iga variandi all loeb mõõdik, mitu vajutust kulus.</p>
+</header>
+
+<section class="opt" id="optA">
+  <div class="opt-head"><span class="tag">A</span><h2>Otsi nupp + tulemused</h2></div>
+  <p class="sub">Paneelile lisandub nupp <b>Otsi mängu</b>. See avab tekstivälja; kirjutad
+  paar tähte ja saad tagasi kuni 25 kõige paremat vastet valikumenüüna. Otsing kitsendab
+  nimekirja alla 25 mängu, nii et menüü piirang lakkab olemast piirang.</p>
+  <div class="band">
+    <div>
+      <div class="spec"><dl>
+        <div class="row"><dt>Ulatus</dt><dd class="yes">kõik 230</dd></div>
+        <div class="row"><dt>Vajutusi</dt><dd class="mono">4 mängu kohta</dd></div>
+        <div class="row"><dt>Korraga</dt><dd>mitu mängu</dd></div>
+        <div class="row"><dt>Sirvimine</dt><dd class="no">ei</dd></div>
+        <div class="row"><dt>Uut koodi</dt><dd class="part">vähe</dd></div>
+      </dl></div>
+      <ul class="limits">
+        <li>Kasutab olemasolevat <b>searchGamesForAutocomplete</b> päringut — see on juba
+        olemas, indekseeritud ja testitud <code>/games who</code> jaoks.</li>
+        <li>Pead <b>teadma, mida otsid</b>. Avastamiseks ei sobi.</li>
+        <li>Kirjaviga = tühi tulemus. Otsing on tähelepanematu diakriitikute ja
+        suurtähtede suhtes, aga mitte trükivigade suhtes.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="mock" id="mA"></div>
+      <div class="meter" id="meterA"></div>
+      <button class="reset" onclick="resetA()">Alusta otsast</button>
+    </div>
+  </div>
+</section>
+
+<section class="opt" id="optB">
+  <div class="opt-head"><span class="tag">B</span><h2>Lehekülgedega valikumenüü</h2></div>
+  <p class="sub">Praegune menüü jääb alles, ümber tulevad nooled. 25 mängu lehel,
+  10 lehte, järjestatud populaarsuse järgi. Midagi uut õppida ei ole — see on sama
+  ekraan, millel on rohkem lehti.</p>
+  <div class="band">
+    <div>
+      <div class="spec"><dl>
+        <div class="row"><dt>Ulatus</dt><dd class="yes">kõik 230</dd></div>
+        <div class="row"><dt>Vajutusi</dt><dd class="mono">~21 kolme eest</dd></div>
+        <div class="row"><dt>Korraga</dt><dd class="part">üks leht</dd></div>
+        <div class="row"><dt>Sirvimine</dt><dd class="yes">jah</dd></div>
+        <div class="row"><dt>Uut koodi</dt><dd class="yes">väga vähe</dd></div>
+      </dl></div>
+      <ul class="limits">
+        <li><b>Valik kaob lehte vahetades.</b> Discord saadab menüü valiku alles siis, kui
+        menüü suletakse — teisele lehele minek tähendab eraldi salvestamist iga lehe kohta.</li>
+        <li>Kolm otsitavat mängu on <b>lehtedel 3, 6 ja 8</b>. Ilma otsinguta pead
+        teadma, kust vaadata — või kerima kõik kümme läbi.</li>
+        <li>Uue liikmega kasvab lehtede arv. 500 mängu = 20 lehte.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="mock" id="mB"></div>
+      <div class="meter" id="meterB"></div>
+      <button class="reset" onclick="resetB()">Alusta otsast</button>
+    </div>
+  </div>
+</section>
+
+<section class="opt" id="optC">
+  <div class="opt-head"><span class="tag">C</span><h2>Täisnimekiri linnukestega</h2></div>
+  <p class="sub">Sama ekraan, mis on juba importimisel ja <code>/steam change</code> all:
+  iga mäng oma real, oma linnukesega, valik püsib lehtede vahel ja salvestad lõpus korra.
+  Kogu serveri kataloog, 10 mängu lehel.</p>
+  <div class="band">
+    <div>
+      <div class="spec"><dl>
+        <div class="row"><dt>Ulatus</dt><dd class="yes">kõik 230</dd></div>
+        <div class="row"><dt>Vajutusi</dt><dd class="mono">~22 kolme eest</dd></div>
+        <div class="row"><dt>Korraga</dt><dd class="yes">piiramatu</dd></div>
+        <div class="row"><dt>Sirvimine</dt><dd class="yes">jah</dd></div>
+        <div class="row"><dt>Uut koodi</dt><dd class="yes">peaaegu null</dd></div>
+      </dl></div>
+      <ul class="limits">
+        <li><b>runChecklist on juba olemas.</b> Sama funktsioon, teine nimekiri —
+        see on kõige väiksem muudatus kogu lehel.</li>
+        <li>Valik <b>püsib</b> lehtede vahel, salvestad lõpus ühe korra.</li>
+        <li>230 mängu = <b>23 lehte</b>. Ühe kindla mängu leidmiseks on see aeglane;
+        „vaatan, mis siin on“ jaoks parim.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="mock" id="mC"></div>
+      <div class="meter" id="meterC"></div>
+      <button class="reset" onclick="resetC()">Alusta otsast</button>
+    </div>
+  </div>
+</section>
+
+<section class="opt" id="optD">
+  <div class="opt-head"><span class="tag">D</span><h2>Otsing käsu enda sees</h2></div>
+  <p class="sub">Paneeli asemel käsk: <code>/games add game:</code> ja hakkad kirjutama.
+  Discord pakub vasteid juba kirjutamise ajal, sama moodi nagu <code>/games who</code> juures.
+  Valid nime, mäng on lisatud — vahepealseid ekraane ei ole.</p>
+  <div class="band">
+    <div>
+      <div class="spec"><dl>
+        <div class="row"><dt>Ulatus</dt><dd class="yes">kõik 230</dd></div>
+        <div class="row"><dt>Vajutusi</dt><dd class="mono">1 mängu kohta</dd></div>
+        <div class="row"><dt>Korraga</dt><dd class="no">üks mäng</dd></div>
+        <div class="row"><dt>Sirvimine</dt><dd class="no">ei</dd></div>
+        <div class="row"><dt>Uut koodi</dt><dd class="part">keskmine</dd></div>
+      </dl></div>
+      <ul class="limits">
+        <li><b>Kiireim võimalik.</b> Kolm tähte ja mäng on käes, ilma ühegi paneelita.</li>
+        <li>Discord annab siin <b>3 sekundit</b> ja vastust ei saa edasi lükata. Päring
+        on juba selleks ehitatud — <code>/games who</code> teeb sama asja.</li>
+        <li><b>Üks mäng korraga.</b> Kolm mängu = käsk kolm korda.</li>
+        <li>Saab lisada olemasoleva paneeli <b>kõrvale</b>, mitte asemele.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="mock" id="mD"></div>
+      <div class="meter" id="meterD"></div>
+      <button class="reset" onclick="resetD()">Alusta otsast</button>
+    </div>
+  </div>
+</section>
+
+<section class="cmp">
+  <table>
+    <thead><tr>
+      <th>Variant</th><th>Kolm mängu maksab</th><th>Leiab kindla mängu</th>
+      <th>Sobib sirvimiseks</th><th>Mitu korraga</th><th>Tööd</th>
+    </tr></thead>
+    <tbody>
+      <tr><td><span class="nm">A</span> Otsi nupp</td><td class="mono">12 vajutust</td>
+        <td class="yes">jah</td><td class="no">ei</td><td>mitu</td><td class="part">vähe</td></tr>
+      <tr><td><span class="nm">B</span> Lehed</td><td class="mono">21 vajutust</td>
+        <td class="part">kui tead lehte</td><td class="yes">jah</td><td class="part">leht korraga</td><td class="yes">väga vähe</td></tr>
+      <tr><td><span class="nm">C</span> Linnukesed</td><td class="mono">22 vajutust</td>
+        <td class="no">aeglane</td><td class="yes">jah</td><td class="yes">piiramatu</td><td class="yes">peaaegu null</td></tr>
+      <tr><td><span class="nm">D</span> Käsu otsing</td><td class="mono">3 vajutust</td>
+        <td class="yes">jah</td><td class="no">ei</td><td class="no">üks</td><td class="part">keskmine</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="rec">
+  <h3>Mida mina soovitan</h3>
+  <p><b>A + C koos.</b> Need kaks katavad kaks erinevat küsimust ja kumbki üksi kumbagi ei kata.
+  <b>A</b> vastab küsimusele „ma tahan Hollow Knighti“. <b>C</b> vastab küsimusele
+  „mis siin üldse on“. Praegune 25-mänguline menüü võib alles jääda kiirvalikuna —
+  see on hea vastus küsimusele „mida siin kõige rohkem mängitakse“.</p>
+  <p><b>C</b> on peaaegu tasuta: <code>runChecklist</code> on juba olemas ja testitud, vaja on
+  ainult teine nimekiri ette anda. <b>A</b> vajab ühe nupu, ühe akna ja ühe olemasoleva
+  päringu kokkuühendamist.</p>
+  <p><b>D</b> on kiireim, aga muudab <code>/games add</code> kuju ja lisab ainult ühe mängu
+  korraga. Kui tahad seda, siis paneeli kõrvale, mitte asemele.</p>
+</div>
+</div>
+
+<script>
+const CATALOG = [["Counter-Strike 2", 8], ["Left 4 Dead 2", 8], ["Among Us", 7], ["Dota 2", 6], ["Minecraft", 6], ["Portal 2", 6], ["Cyberpunk 2077", 5], ["HELLDIVERS™ 2", 5], ["Risk of Rain 2", 5], ["Team Fortress 2", 5], ["Terraria", 5], ["ELDEN RING", 4], ["Garry's Mod", 4], ["Hades", 4], ["Half-Life 2", 4], ["Rust", 4], ["Vampire Survivors", 4], ["Don't Starve Together", 3], ["Lethal Company", 3], ["Project Zomboid", 3], ["RimWorld", 3], ["Satisfactory", 3], ["Subnautica", 3], ["Valheim", 3], ["Baldur's Gate 3", 2], ["Dead Cells", 2], ["Far Cry 5", 2], ["Half-Life 2: Deathmatch", 2], ["Half-Life Deathmatch: Source", 2], ["Hearts of Iron IV", 2], ["Human Fall Flat", 2], ["League of Legends", 2], ["Learn to Fly 3", 2], ["No Man's Sky", 2], ["Outer Wilds", 2], ["Portal", 2], ["ROUNDS", 2], ["Slay the Spire", 2], ["Stardew Valley", 2], ["The Escapists 2", 2], ["The Witcher 3: Wild Hunt", 2], ["Titanfall® 2", 2], ["112 Operator", 1], ["3DMark Demo", 1], ["60 Parsecs!", 1], ["60 Seconds! Reatomized", 1], ["911 Operator", 1], ["A Fisherman's Tale", 1], ["A Way Out", 1], ["ACE COMBAT™7: SKIES UNKNOWN", 1], ["ASTRONEER", 1], ["Acron: Attack of the Squirrels!", 1], ["AdVenture Capitalist", 1], ["Aimlabs", 1], ["Antimatter Dimensions", 1], ["Assassin's Creed Odyssey", 1], ["Astronomics", 1], ["Battlefield™ 2042", 1], ["Beyond: Two Souls", 1], ["Black Desert", 1], ["Bloons TD Battles", 1], ["Brotato", 1], ["Bully: Scholarship Edition", 1], ["CS2D", 1], ["Call of Duty®", 1], ["Can of Wormholes", 1], ["Car Mechanic Simulator VR", 1], ["Celeste", 1], ["Clone Drone in the Danger Zone", 1], ["Clustertruck", 1], ["Cook-Out", 1], ["Cosmoteer: Starship Architect & Commander", 1], ["Counter-Strike", 1], ["Counter-Strike: Condition Zero", 1], ["Counter-Strike: Condition Zero Deleted Scenes", 1], ["Counter-Strike: Source", 1], ["Crab Game", 1], ["Crown Trick", 1], ["Crusader Kings III", 1], ["DEPLOYMENT", 1], ["Day of Defeat", 1], ["Day of Defeat: Source", 1], ["Dead Space", 1], ["Deathmatch Classic", 1], ["Deep Rock Galactic", 1], ["Descenders", 1], ["Detroit: Become Human", 1], ["Disco Elysium", 1], ["Door Kickers 2", 1], ["Dropzone", 1], ["Duck Season", 1], ["EVE Online", 1], ["EVERSPACE™ 2", 1], ["Elite Dangerous", 1], ["FAR: Lone Sails", 1], ["FPS Chess", 1], ["FTL: Faster Than Light", 1], ["Factorio", 1], ["Fallout 4", 1], ["Far Cry 4", 1], ["Far Cry® 3", 1], ["Fibbage XL", 1], ["Firewatch", 1], ["Forgive Me Father", 1], ["Fortnite", 1], ["Forza Horizon 4", 1], ["Freddy Fazbear's Pizzeria Simulator", 1], ["GOAT OF DUTY", 1], ["Getting Over It with Bennett Foddy", 1], ["Ghostrunner 2", 1], ["Golf With Your Friends", 1], ["Gorilla Tag", 1], ["Grand Theft Auto IV: The Complete Edition", 1], ["Grand Theft Auto V Enhanced", 1], ["Grand Theft Auto V Legacy", 1], ["Graveyard Keeper", 1], ["Gray Zone Warfare", 1], ["HITMAN™ 2", 1], ["Half-Life", 1], ["Half-Life: Blue Shift", 1], ["Half-Life: Opposing Force", 1], ["Half-Life: Source", 1], ["Hardspace: Shipbreaker", 1], ["Haste", 1], ["Heavy Rain", 1], ["Hello Neighbor", 1], ["Hollow Knight", 1], ["I Expect You To Die", 1], ["I Expect You To Die 2", 1], ["INDUSTRIA", 1], ["Idle Research", 1], ["Idle Spiral", 1], ["Incremental Cubes", 1], ["Industry Idle", 1], ["Infinitode 2", 1], ["It Takes Two", 1], ["Jurassic World Evolution 2", 1], ["Just Cause 3", 1], ["Just Cause 4", 1], ["L.A. Noire", 1], ["LEGO® DC Super-Villains", 1], ["LEGO® Jurassic World", 1], ["LEGO® MARVEL Super Heroes", 1], ["LEGO® MARVEL Super Heroes 2", 1], ["LEGO® MARVEL's Avengers", 1], ["LEGO® The Incredibles", 1], ["Lara Croft and the Temple of Osiris", 1], ["Left 4 Dead", 1], ["Liftoff", 1], ["Loading Screen Simulator", 1], ["Lossless Scaling", 1], ["MECCHA CHAMELEON", 1], ["Mafia", 1], ["Mindustry", 1], ["Mr.President!", 1], ["Muck", 1], ["Northgard: Definitive Edition", 1], ["Nova Drift", 1], ["PEAK", 1], ["PICO PARK", 1], ["PUBG: BATTLEGROUNDS", 1], ["Party Animals", 1], ["Per Aspera", 1], ["Plague Inc: Evolved", 1], ["Portal: Revolution", 1], ["Quiplash 2 InterLASHional", 1], ["Rain World", 1], ["Redmatch 2", 1], ["Ricochet", 1], ["Rise of the Tomb Raider", 1], ["Robocraft", 1], ["SCP: Secret Laboratory", 1], ["SNOW", 1], ["SUPERHOT", 1], ["SUPERHOT VR", 1], ["Sairento VR", 1], ["Shadow of the Tomb Raider", 1], ["Shooty Fruity", 1], ["Sid Meier's Civilization V", 1], ["Sixty Four", 1], ["Sniper Elite 4", 1], ["Sons Of The Forest", 1], ["Space Engineers", 1], ["Space Engineers 2", 1], ["Squad", 1], ["Squad - Public Testing", 1], ["Stellaris", 1], ["Stick Fight: The Game", 1], ["Stick It to the Stickman", 1], ["Surviving Mars", 1], ["Team Fortress Classic", 1], ["Teardown", 1], ["TerraTech", 1], ["TerraTech Worlds", 1], ["The Crust", 1], ["The Curious Tale of the Stolen Pets", 1], ["The Devil's Calculator", 1], ["The Dungeon Of Naheulbeuk: The Amulet Of Chaos", 1], ["The Henry Stickmin Collection", 1], ["The Jackbox Megapicker", 1], ["The Jackbox Party Pack", 1], ["The Jackbox Party Pack 3", 1], ["The Jackbox Party Pack 5", 1], ["The Jackbox Party Pack 7", 1], ["The Jackbox Party Pack 9", 1], ["The Jackbox Party Starter", 1], ["The LEGO® Movie - Videogame", 1], ["The LEGO® Movie 2 - Videogame", 1], ["The LEGO® NINJAGO® Movie Video Game", 1], ["The Talos Principle", 1], ["The Talos Principle 2", 1], ["The Wild Eight", 1], ["The Wizards - Dark Times", 1], ["Time Lock VR 1", 1], ["Tiny Tina's Assault on Dragon Keep: A Wonderlands One-shot Adventure", 1], ["Tomb Raider", 1], ["Totally Accurate Battlegrounds", 1], ["Turing Complete", 1], ["Undertale", 1], ["Unrailed!", 1], ["Until You Fall", 1], ["Unturned", 1], ["Upload Labs", 1], ["VRChat", 1], ["Victoria II", 1], ["Zeepkist", 1], ["Zero Caliber VR", 1], ["shapez", 1], ["tModLoader", 1], ["theHunter: Call of the Wild™", 1]];
+
+/* The three games the task asks for. None is in the top 25, which is the point. */
+const TARGET = ['Hollow Knight', 'Stellaris', 'Celeste'];
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* Search folded the same way src/text.ts foldName() does: NFKD, drop combining
+   marks, lowercase. That is what makes "pokemon" find "Pokémon". */
+const fold = (s) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().trim();
+const FOLDED = CATALOG.map(([n, o]) => [n, o, fold(n)]);
+function search(q, limit) {
+  const f = fold(q);
+  if (!f) return [];
+  return FOLDED.filter((r) => r[2].includes(f)).slice(0, limit || 25);
+}
+const owners = (n) => `${n} inimesel on see olemas`;
+
+function meter(id, clicks, added, note) {
+  const done = TARGET.every((t) => added.has(t));
+  document.getElementById(id).innerHTML =
+    `<div><div class="mk">vajutusi</div><div class="mv">${clicks}</div></div>` +
+    `<div><div class="mk">lisatud</div><div class="mv ${done ? 'done' : ''}">${added.size}/3</div></div>` +
+    `<div><div class="mk">seis</div><div class="mv ${done ? 'done' : ''}" style="font-size:13px">${
+      done ? 'valmis' : (note || 'pooleli')}</div></div>`;
+}
+
+const botline = (label) =>
+  `<div class="botline"><div class="avatar">SM</div><div class="who">SteamMatch</div>` +
+  `<span class="badge">BOT</span><span class="eph">${label}</span></div>`;
+
+/* ------------------------------------------------------------------ *
+ * A -- search button, modal, results select
+ * ------------------------------------------------------------------ */
+const A = { clicks: 0, added: new Set(), modal: false, query: '', results: null, draft: new Set(), open: false };
+
+function renderA() {
+  const m = document.getElementById('mA');
+  const added = [...A.added];
+  let html = botline('ainult sulle nähtav');
+  html += `<div class="embed"><div class="t">Lisa mänge oma nimekirja</div>` +
+    `<div class="d">Sinu nimekirjas: <b>${added.length}</b> ${added.length === 1 ? 'mäng' : 'mängu'}` +
+    (added.length ? ` — ${added.map(esc).join(', ')}` : '') +
+    `<br>Serveris on kokku <b>230</b> mängu.</div></div>`;
+
+  html += '<div class="comps">';
+  if (A.results) {
+    const label = A.draft.size ? `${A.draft.size} valitud` : `${A.results.length} vastet otsingule „${esc(A.query)}"`;
+    html += `<div><div class="select" onclick="ddA()"><span>${label}</span><span class="caret">▼</span></div>`;
+    if (A.open) {
+      html += '<div class="dd">';
+      html += A.results.length
+        ? A.results.map(([n, o]) =>
+            `<div class="o ${A.draft.has(n) ? 'on' : ''}" onclick="pickA('${esc(n).replace(/'/g, "\\'")}')">` +
+            `<div class="box">${A.draft.has(n) ? '✓' : ''}</div><div><span class="nm">${esc(n)}</span>` +
+            `<span class="sub2">${owners(o)}</span></div></div>`).join('')
+        : '<div class="empty">Midagi ei leitud. Proovi teisiti kirjutada.</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += `<div class="arow"><button class="btn success" onclick="saveA()" ${A.draft.size ? '' : 'disabled'}>` +
+      `Lisa valitud${A.draft.size ? ` (${A.draft.size})` : ''}</button>` +
+      `<button class="btn" onclick="againA()">Otsi uuesti</button></div>`;
+  } else {
+    html += `<div class="arow"><button class="btn primary" onclick="steamA()">Impordi Steami kogu</button>` +
+      `<button class="btn primary" onclick="openA()">🔍 Otsi mängu</button>` +
+      `<button class="btn" onclick="noopA()">Lisa muu mäng</button>` +
+      `<button class="btn" onclick="noopA()">Eemalda</button></div>`;
+  }
+  html += '</div>';
+
+  if (A.modal) {
+    html += `<div class="modal"><div class="sheet"><h4>Otsi mängu</h4><div class="body">` +
+      `<label>Mängu nimi või osa sellest</label>` +
+      `<input id="qA" value="${esc(A.query)}" placeholder="hollow" autocomplete="off">` +
+      `</div><div class="foot"><button class="btn" onclick="cancelA()">Katkesta</button>` +
+      `<button class="btn primary" onclick="submitA()">Otsi</button></div></div></div>`;
+  }
+  m.innerHTML = html;
+  if (A.modal) {
+    const i = document.getElementById('qA');
+    i.focus();
+    i.oninput = (e) => { A.query = e.target.value; };
+    i.onkeydown = (e) => { if (e.key === 'Enter') submitA(); };
+  }
+  meter('meterA', A.clicks, A.added, A.results ? 'tulemused' : 'paneel');
+}
+function openA() { A.clicks++; A.modal = true; A.query = ''; renderA(); }
+function cancelA() { A.clicks++; A.modal = false; renderA(); }
+function submitA() { A.clicks++; A.modal = false; A.results = search(A.query, 25); A.draft = new Set(); A.open = true; renderA(); }
+function ddA() { A.clicks++; A.open = !A.open; renderA(); }
+function pickA(n) { A.clicks++; A.draft.has(n) ? A.draft.delete(n) : A.draft.add(n); renderA(); }
+function saveA() { A.clicks++; A.draft.forEach((n) => A.added.add(n)); A.results = null; A.open = false; A.draft = new Set(); renderA(); }
+function againA() { A.clicks++; A.results = null; A.open = false; A.modal = true; A.query = ''; renderA(); }
+function steamA() { A.clicks++; renderA(); }
+function noopA() { A.clicks++; renderA(); }
+function resetA() { Object.assign(A, { clicks: 0, added: new Set(), modal: false, query: '', results: null, draft: new Set(), open: false }); renderA(); }
+
+/* ------------------------------------------------------------------ *
+ * B -- paginated select
+ * ------------------------------------------------------------------ */
+const PAGE_B = 25;
+const B = { clicks: 0, added: new Set(), page: 0, open: false, draft: new Set() };
+const pagesB = Math.ceil(CATALOG.length / PAGE_B);
+
+function renderB() {
+  const rows = CATALOG.slice(B.page * PAGE_B, B.page * PAGE_B + PAGE_B);
+  const added = [...B.added];
+  let html = botline('ainult sulle nähtav');
+  html += `<div class="embed"><div class="t">Lisa mänge oma nimekirja</div>` +
+    `<div class="d">Sinu nimekirjas: <b>${added.length}</b>` +
+    (added.length ? ` — ${added.map(esc).join(', ')}` : '') +
+    `<br>Mängud <b>${B.page * PAGE_B + 1}–${Math.min((B.page + 1) * PAGE_B, CATALOG.length)}</b>` +
+    ` / ${CATALOG.length}, populaarsuse järjekorras.</div></div>`;
+
+  html += '<div class="comps"><div>';
+  html += `<div class="select" onclick="ddB()"><span>${
+    B.draft.size ? `${B.draft.size} valitud sellel lehel` : 'Vali, mida sa mängid'}</span><span class="caret">▼</span></div>`;
+  if (B.open) {
+    html += '<div class="dd">' + rows.map(([n, o]) =>
+      `<div class="o ${B.draft.has(n) ? 'on' : ''}" onclick="pickB('${esc(n).replace(/'/g, "\\'")}')">` +
+      `<div class="box">${B.draft.has(n) ? '✓' : ''}</div><div><span class="nm">${esc(n)}</span>` +
+      `<span class="sub2">${owners(o)}</span></div></div>`).join('') + '</div>';
+  }
+  html += '</div>';
+  html += `<div class="arow">` +
+    `<button class="btn sq" onclick="navB(-1)" ${B.page === 0 ? 'disabled' : ''}>◀</button>` +
+    `<button class="btn sq" disabled>${B.page + 1}/${pagesB}</button>` +
+    `<button class="btn sq" onclick="navB(1)" ${B.page >= pagesB - 1 ? 'disabled' : ''}>▶</button>` +
+    `<button class="btn success" onclick="saveB()" ${B.draft.size ? '' : 'disabled'}>Lisa valitud</button>` +
+    `</div></div>`;
+  document.getElementById('mB').innerHTML = html;
+  meter('meterB', B.clicks, B.added, `leht ${B.page + 1}/${pagesB}`);
+}
+function ddB() { B.clicks++; B.open = !B.open; renderB(); }
+function pickB(n) { B.clicks++; B.draft.has(n) ? B.draft.delete(n) : B.draft.add(n); renderB(); }
+function saveB() { B.clicks++; B.draft.forEach((n) => B.added.add(n)); B.draft = new Set(); B.open = false; renderB(); }
+/* Changing page drops the draft -- Discord only delivers a select's values when
+   the menu closes, so an unsaved pick does not survive the jump. */
+function navB(d) { B.clicks++; B.page += d; B.draft = new Set(); B.open = false; renderB(); }
+function resetB() { Object.assign(B, { clicks: 0, added: new Set(), page: 0, open: false, draft: new Set() }); renderB(); }
+
+/* ------------------------------------------------------------------ *
+ * C -- full checklist, Components V2, 10 per page
+ * ------------------------------------------------------------------ */
+const PAGE_C = 10;
+const C = { clicks: 0, added: new Set(), page: 0, ticked: new Set(), saved: false };
+const pagesC = Math.ceil(CATALOG.length / PAGE_C);
+
+function renderC() {
+  if (C.saved) {
+    document.getElementById('mC').innerHTML = botline('ainult sulle nähtav') +
+      `<div class="embed"><div class="t">Lisatud</div><div class="d">Lisasin sulle <b>${C.added.size}</b> ` +
+      `${C.added.size === 1 ? 'mängu' : 'mängu'}: ${[...C.added].map(esc).join(', ')}</div></div>`;
+    meter('meterC', C.clicks, C.added, 'salvestatud');
+    return;
+  }
+  const rows = CATALOG.slice(C.page * PAGE_C, C.page * PAGE_C + PAGE_C);
+  let html = botline('ainult sulle nähtav');
+  html += `<div style="font-size:15px;margin-bottom:8px"><b style="color:var(--dtext-bright)">Vali, mida sa mängid</b><br>` +
+    `<span style="color:var(--dtext-muted);font-size:13px">Leht ${C.page + 1}/${pagesC} · ` +
+    `märgitud <b>${C.ticked.size}</b> / ${CATALOG.length} · märgitud mängud lisatakse sinu nimekirja</span></div>`;
+  html += '<div class="container">' + rows.map(([n, o], i) => {
+    const on = C.ticked.has(n);
+    return `<div class="clrow"><div class="txt"><span class="nm">${C.page * PAGE_C + i + 1}. ${esc(n)}</span>` +
+      `<span class="mt"> · ${owners(o)}</span></div>` +
+      `<button class="clbox ${on ? 'on' : ''}" onclick="tickC('${esc(n).replace(/'/g, "\\'")}')">${on ? '☑' : '☐'}</button></div>`;
+  }).join('') + '</div>';
+  html += `<div class="arow">` +
+    `<button class="btn sq" onclick="navC(-1)" ${C.page === 0 ? 'disabled' : ''}>◀</button>` +
+    `<button class="btn sq" onclick="navC(1)" ${C.page >= pagesC - 1 ? 'disabled' : ''}>▶</button>` +
+    `<button class="btn" onclick="jumpC()">Hüppa lehele…</button>` +
+    `<button class="btn success" onclick="saveC()" ${C.ticked.size ? '' : 'disabled'}>Lisa märgitud</button>` +
+    `<button class="btn" onclick="resetC()">Katkesta</button></div>`;
+  document.getElementById('mC').innerHTML = html;
+  meter('meterC', C.clicks, C.added, `leht ${C.page + 1}/${pagesC}`);
+}
+/* Selection persists across pages -- that is the whole advantage of this shape. */
+function tickC(n) { C.clicks++; C.ticked.has(n) ? C.ticked.delete(n) : C.ticked.add(n); renderC(); }
+function navC(d) { C.clicks++; C.page = Math.min(pagesC - 1, Math.max(0, C.page + d)); renderC(); }
+function jumpC() {
+  const p = prompt(`Leht (1–${pagesC}). Hollow Knight on lehel 13, Stellaris 19, Celeste 7.`);
+  const n = Number.parseInt(p, 10);
+  if (Number.isFinite(n)) { C.clicks++; C.page = Math.min(pagesC - 1, Math.max(0, n - 1)); renderC(); }
+}
+function saveC() { C.clicks++; C.ticked.forEach((n) => C.added.add(n)); C.saved = true; renderC(); }
+function resetC() { Object.assign(C, { clicks: 0, added: new Set(), page: 0, ticked: new Set(), saved: false }); renderC(); }
+
+/* ------------------------------------------------------------------ *
+ * D -- slash-command autocomplete
+ * ------------------------------------------------------------------ */
+const D = { clicks: 0, added: new Set(), query: '', last: null };
+
+function renderD() {
+  const hits = search(D.query, 25);
+  let html = '';
+  if (D.last) {
+    html += botline('ainult sulle nähtav') +
+      `<div class="embed"><div class="t">Lisatud: ${esc(D.last)}</div>` +
+      `<div class="d">Sinu nimekirjas on nüüd <b>${D.added.size}</b> ` +
+      `${D.added.size === 1 ? 'mäng' : 'mängu'}.</div></div>`;
+  }
+  if (D.query) {
+    html += `<div class="acbar"><div class="hd">${
+      hits.length ? `${hits.length} vastet — SteamMatch` : 'Vasteid ei ole'}</div><div class="list">` +
+      (hits.length
+        ? hits.map(([n, o]) =>
+            `<div class="o" onclick="pickD('${esc(n).replace(/'/g, "\\'")}')">` +
+            `<span class="nm">${esc(n)}</span><span class="ct">${o} mängijat</span></div>`).join('')
+        : '<div class="empty" style="padding:14px;color:var(--dtext-muted);font-size:13px">Proovi teisiti kirjutada.</div>') +
+      '</div></div>';
+  }
+  html += `<div class="cmdbar"><span class="slash">/games add</span><span class="opt2">game</span>` +
+    `<input id="qD" value="${esc(D.query)}" placeholder="hakka kirjutama…" autocomplete="off"></div>`;
+  document.getElementById('mD').innerHTML = html;
+  const i = document.getElementById('qD');
+  i.oninput = (e) => { D.query = e.target.value; renderD(); document.getElementById('qD').focus(); };
+  meter('meterD', D.clicks, D.added, D.query ? 'otsib' : 'ootab');
+}
+function pickD(n) { D.clicks++; D.added.add(n); D.last = n; D.query = ''; renderD(); }
+function resetD() { Object.assign(D, { clicks: 0, added: new Set(), query: '', last: null }); renderD(); }
+
+renderA(); renderB(); renderC(); renderD();
+</script>

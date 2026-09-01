@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { applySchema, openDb } from '../src/db/index.js';
 import {
   addUserGame, ensureUser, findMatches, guildCatalog, leaderboard, linkSteam,
-  listGames, removeUserGame, searchGamesForAutocomplete, setOptedIn, sharedGames,
+  listGames, removeUserGame, searchGamesForAutocomplete, searchGuildCatalog,
+  setHiddenGames, setOptedIn, sharedGames,
   touchGuildMember, unlink, upsertManualGame, userManualGames, whoOwns, forget,
 } from '../src/db/queries.js';
 import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
 import { passesPlaytimeFilter } from '../src/commands/games.js';
+import { QUICK_ADD_GAMES, panelComponents } from '../src/commands/add-panel.js';
 import type { LibraryResult, OwnedGame } from '../src/types.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -449,5 +451,144 @@ describe('manual games are reachable from /games who', () => {
     // No owners and no store page: the row has nothing in it, so whoSub must
     // send `components: []` rather than a row with zero components.
     expect(e.whoRow('abc12345', 0, null).components).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Reaching the whole catalogue
+ *
+ * The select menu holds 25 options and stops there. These cover the two ways
+ * past that ceiling: the browse checklist (which reads the catalogue with a
+ * large limit) and /games add's autocomplete search.
+ * ------------------------------------------------------------------ */
+
+describe('searchGuildCatalog', () => {
+  /** More games than a select menu can hold, so the 25-cap is actually crossed. */
+  async function bigCatalog(): Promise<void> {
+    const games: OwnedGame[] = [];
+    for (let i = 1; i <= 40; i++) games.push(g(1000 + i, `Test Game ${i}`, 100 + i));
+    games.push(g(2001, 'Hollow Knight', 900));
+    games.push(g(2002, 'Pokémon Legends', 800));
+    linkSteam(db, B, '76561198000000002');
+    await syncLibrary(db, B, '76561198000000002', source(games));
+  }
+
+  it('finds a game far below the top 25, which the select menu cannot reach', async () => {
+    await bigCatalog();
+    // B owns 42 games; the panel's menu shows 25 of them. Hollow Knight is in
+    // the catalogue either way, but only search can name it.
+    expect(guildCatalog(db, G, A, 25)).toHaveLength(25);
+    expect(guildCatalog(db, G, A, 1000)).toHaveLength(42);
+
+    const hit = searchGuildCatalog(db, G, A, 'hollow', 25);
+    expect(hit.map((r) => r.name)).toEqual(['Hollow Knight']);
+  });
+
+  it('folds diacritics the same way the stored name is folded', async () => {
+    await bigCatalog();
+    expect(searchGuildCatalog(db, G, A, 'pokemon', 25).map((r) => r.name)).toEqual([
+      'Pokémon Legends',
+    ]);
+  });
+
+  it('never offers a game the caller already has', async () => {
+    await bigCatalog();
+    expect(searchGuildCatalog(db, G, A, 'hollow', 25)).toHaveLength(1);
+    addUserGame(db, A, 2001);
+    expect(searchGuildCatalog(db, G, A, 'hollow', 25)).toEqual([]);
+  });
+
+  it('never offers a game its only owner has hidden', async () => {
+    await bigCatalog();
+    expect(searchGuildCatalog(db, G, A, 'hollow', 25)).toHaveLength(1);
+    setHiddenGames(db, B, [2001]);
+    expect(searchGuildCatalog(db, G, A, 'hollow', 25)).toEqual([]);
+    // ...and the unfiltered catalogue agrees, so search cannot be the loose one.
+    expect(guildCatalog(db, G, A, 1000).some((r) => r.appid === 2001)).toBe(false);
+  });
+
+  it('never offers a game belonging to somebody invisible here', async () => {
+    await bigCatalog();
+    setOptedIn(db, B, false);
+    expect(searchGuildCatalog(db, G, A, 'hollow', 25)).toEqual([]);
+  });
+
+  it('matches LIKE metacharacters literally', async () => {
+    linkSteam(db, B, '76561198000000002');
+    await syncLibrary(db, B, '76561198000000002', source([g(3001, '100% Orange Juice', 60)]));
+    expect(searchGuildCatalog(db, G, A, '100%', 25).map((r) => r.name)).toEqual([
+      '100% Orange Juice',
+    ]);
+    // The escape is what stops this from matching "100" as a prefix wildcard.
+    expect(searchGuildCatalog(db, G, A, '100%o', 25)).toEqual([]);
+  });
+
+  it('falls back to the plain catalogue when nothing is typed yet', async () => {
+    await bigCatalog();
+    // Discord asks for suggestions before the first keystroke; a blank menu
+    // there would make the option look broken.
+    expect(searchGuildCatalog(db, G, A, '', 25)).toHaveLength(25);
+    expect(searchGuildCatalog(db, G, A, '   ', 25)).toHaveLength(25);
+  });
+
+  it('ranks by how many people here have it', async () => {
+    linkSteam(db, B, '76561198000000002');
+    await syncLibrary(db, B, '76561198000000002', source([g(10, 'Half-Life 2', 500), g(11, 'Half-Life Deathmatch', 5)]));
+    ensureUser(db, 'U_c');
+    touchGuildMember(db, G, 'U_c');
+    setOptedIn(db, 'U_c', true);
+    linkSteam(db, 'U_c', '76561198000000003');
+    await syncLibrary(db, 'U_c', '76561198000000003', source([g(10, 'Half-Life 2', 300)]));
+
+    expect(searchGuildCatalog(db, G, A, 'half', 25).map((r) => r.name)).toEqual([
+      'Half-Life 2',
+      'Half-Life Deathmatch',
+    ]);
+  });
+});
+
+describe('the /games add panel layout', () => {
+  const row = (sid: string, n: number) =>
+    panelComponents(
+      sid,
+      Array.from({ length: n }, (_, i) => ({ appid: 100 + i, name: `Game ${i}`, owners: 2 })),
+    ).map((r) => r.toJSON());
+
+  it('offers a way past the select menu, whatever the catalogue size', () => {
+    const ids = row('abc12345', 40)
+      .flatMap((r) => r.components)
+      .map((c) => ('custom_id' in c ? c.custom_id : null));
+    // The menu is capped at 25 by Discord, so browse is the ONLY component that
+    // can reach game 26 and beyond.
+    expect(ids).toContain('gp:abc12345:browse');
+  });
+
+  it('caps the select menu at 25 while the catalogue is larger', () => {
+    const menu = row('abc12345', 40)[0]!.components[0]!;
+    expect('options' in menu ? menu.options.length : 0).toBe(25);
+  });
+
+  it('drops the select menu entirely when there is nothing to pick', () => {
+    const rows = row('abc12345', 0);
+    expect(rows.every((r) => r.components.every((c) => 'custom_id' in c))).toBe(true);
+    const ids = rows.flatMap((r) => r.components).map((c) => ('custom_id' in c ? c.custom_id : null));
+    expect(ids).toContain('gp:abc12345:browse');
+  });
+
+  it('never puts more than five components in one action row', () => {
+    // The primary actions used to share a row with the quick-add buttons under
+    // a slice(0, 5); a second quick-add game would have silently eaten one.
+    for (const r of row('abc12345', 40)) expect(r.components.length).toBeLessThanOrEqual(5);
+  });
+
+  it('keeps every primary action reachable, quick-add list notwithstanding', () => {
+    const ids = row('abc12345', 40)
+      .flatMap((r) => r.components)
+      .map((c) => ('custom_id' in c ? c.custom_id : null));
+    for (const key of ['steam', 'browse', 'manual', 'remove']) {
+      expect(ids, key).toContain(`gp:abc12345:${key}`);
+    }
+    // ...and the quick-add buttons still made it, on their own row.
+    QUICK_ADD_GAMES.forEach((_q, i) => expect(ids).toContain(`gp:abc12345:quick${i}`));
   });
 });

@@ -890,6 +890,62 @@ export function guildCatalog(
   }) as CatalogRow[];
 }
 
+/**
+ * The same catalogue, narrowed by a typed name.
+ *
+ * Identical predicates to SQL_GUILD_CATALOG -- same view, same eligibility,
+ * same "not already mine" clause -- with one LIKE on top. Written out rather
+ * than composed from a fragment so that the two can be read side by side and
+ * seen to agree; a catalogue that leaked a hidden game only in its search form
+ * is exactly the bug the shared view exists to prevent.
+ *
+ * Ordered by owners, so the game most of the server has wins the top slot for
+ * an ambiguous query -- "half" should offer Half-Life 2 before Half-Life
+ * Deathmatch: Source.
+ */
+const SQL_SEARCH_GUILD_CATALOG = `
+  SELECT g.appid AS appid,
+         g.name AS name,
+         g.source AS source,
+         COUNT(*) AS owners
+  FROM eligible_members em
+  JOIN visible_user_games ug ON ug.user_id = em.user_id
+  JOIN games g ON g.appid = ug.appid
+  WHERE em.guild_id = @guild
+    AND g.name_folded LIKE @pattern ESCAPE '\\'
+    AND NOT EXISTS (
+      SELECT 1 FROM user_games mine
+      WHERE mine.user_id = @me AND mine.appid = g.appid
+    )
+  GROUP BY g.appid, g.name, g.source
+  ORDER BY owners DESC, g.name ASC
+  LIMIT @limit
+`;
+
+/**
+ * Autocomplete for /games add: games somebody here has that the caller does not,
+ * matching what they have typed so far.
+ *
+ * An empty query falls through to guildCatalog(), so the very first keystroke
+ * is not a blank menu -- Discord asks for suggestions before anything is typed.
+ */
+export function searchGuildCatalog(
+  db: Database,
+  guildId: string,
+  userId: string,
+  query: string,
+  limit = 25,
+): CatalogRow[] {
+  const folded = foldForSearch(query);
+  if (folded === '') return guildCatalog(db, guildId, userId, limit);
+  return prep(db, SQL_SEARCH_GUILD_CATALOG).all({
+    guild: guildId,
+    me: userId,
+    pattern: `%${escapeLike(folded)}%`,
+    limit,
+  }) as CatalogRow[];
+}
+
 const SQL_USER_MANUAL_GAMES = `
   SELECT g.appid AS appid, g.name AS name
   FROM user_games ug
