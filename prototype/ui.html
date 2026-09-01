@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamMatch — UI prototype</title>
+<style>
+  :root{
+    --server-bg:#1e1f22;
+    --side-bg:#2b2d31;
+    --chat-bg:#313338;
+    --embed-bg:#2b2d31;
+    --text:#dbdee1;
+    --text-bright:#f2f3f5;
+    --text-muted:#949ba4;
+    --link:#00a8fc;
+    --blurple:#5865f2;
+    --btn-secondary:#4e5058;
+    --btn-success:#248046;
+    --btn-danger:#da373c;
+    --divider:#3f4147;
+    --steam-blue:#66c0f4;
+    --steam-navy:#1b2838;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:#202225;
+    color:var(--text);
+    font-family:"gg sans","Noto Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:16px;
+    line-height:1.375;
+  }
+  .note{
+    max-width:1180px;margin:24px auto 16px;padding:14px 18px;
+    background:#2b2d31;border-left:4px solid var(--steam-blue);border-radius:6px;
+    color:var(--text-muted);font-size:14px;
+  }
+  .note b{color:var(--text-bright)}
+  .note code{background:#1e1f22;padding:1px 5px;border-radius:3px;color:var(--steam-blue);font-size:13px}
+
+  .app{
+    max-width:1180px;margin:0 auto 60px;height:auto;
+    display:grid;grid-template-columns:72px 240px 1fr;
+    border-radius:8px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.5);
+  }
+  /* server rail */
+  .rail{background:var(--server-bg);padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .server{
+    width:48px;height:48px;border-radius:16px;background:var(--blurple);
+    display:flex;align-items:center;justify-content:center;
+    color:#fff;font-weight:600;font-size:15px;
+  }
+  .server.alt{background:#4e5058;border-radius:50%}
+  /* channel sidebar */
+  .side{background:var(--side-bg);padding:0}
+  .side h2{
+    margin:0;padding:16px 16px;font-size:15px;color:var(--text-bright);
+    border-bottom:1px solid rgba(0,0,0,.25);box-shadow:0 1px 0 rgba(0,0,0,.2);
+  }
+  .chan{padding:6px 10px;margin:2px 8px;border-radius:4px;color:var(--text-muted);font-size:15px}
+  .chan.active{background:#404249;color:var(--text-bright)}
+  .chan::before{content:"# ";opacity:.6}
+  .side .label{padding:16px 16px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.02em;color:var(--text-muted);font-weight:700}
+
+  /* chat */
+  .chat{background:var(--chat-bg);min-width:0}
+  .chat-header{
+    padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.2);
+    color:var(--text-bright);font-weight:600;font-size:15px;
+    box-shadow:0 1px 0 rgba(0,0,0,.2);position:relative;z-index:2;
+  }
+  .chat-header span{color:var(--text-muted);font-weight:400;margin-left:8px;font-size:13px}
+  .messages{padding:16px 16px 32px}
+
+  .screen-label{
+    margin:34px 0 10px;padding:6px 12px;border-left:3px solid var(--steam-blue);
+    color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;
+    background:rgba(102,192,244,.06);
+  }
+  .screen-label:first-child{margin-top:0}
+
+  .msg{display:flex;gap:16px;padding:8px 0}
+  .avatar{width:40px;height:40px;border-radius:50%;flex:0 0 40px;background:var(--blurple);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:600}
+  .avatar.bot{background:linear-gradient(135deg,#1b2838,#66c0f4)}
+  .avatar.u1{background:#c9705a}.avatar.u2{background:#5a8fc9}.avatar.u3{background:#7a5ac9}
+  .msg-body{min-width:0;flex:1}
+  .msg-head{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .author{color:var(--text-bright);font-weight:500;font-size:16px}
+  .tag{background:var(--blurple);color:#fff;font-size:10px;font-weight:600;padding:1px 4px;border-radius:3px;text-transform:uppercase;letter-spacing:.02em}
+  .ts{color:var(--text-muted);font-size:12px}
+  .cmd-line{color:var(--text-muted);font-size:15px;margin-bottom:6px}
+  .cmd-line .slash{color:var(--link);background:rgba(88,101,242,.12);padding:1px 4px;border-radius:3px}
+  .cmd-line .arg{color:var(--text)}
+
+  /* embed */
+  .embed{
+    background:var(--embed-bg);border-left:4px solid var(--steam-blue);
+    border-radius:4px;padding:12px 16px 14px;max-width:520px;margin-top:4px;
+  }
+  .embed.ok{border-left-color:#3ba55d}
+  .embed.warn{border-left-color:#faa61a}
+  .embed.err{border-left-color:#ed4245}
+  .embed-author{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:14px;color:var(--text-bright);font-weight:600}
+  .embed-author .pfp{width:24px;height:24px;border-radius:50%;background:#c9705a;flex:0 0 24px}
+  .embed-title{color:var(--text-bright);font-weight:600;font-size:16px;margin-bottom:8px}
+  .embed-title a{color:var(--link);text-decoration:none}
+  .embed-desc{font-size:14px;color:var(--text);white-space:pre-wrap}
+  .embed-fields{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+  .field{min-width:0}
+  .field .fname{font-size:14px;font-weight:600;color:var(--text-bright);margin-bottom:2px}
+  .field .fval{font-size:14px;color:var(--text)}
+  .embed-footer{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--text-muted);font-size:12px}
+  .embed-thumb{float:right;width:80px;height:80px;border-radius:4px;margin-left:12px;
+    display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:20px}
+
+  /* game rows */
+  .rows{margin-top:6px}
+  .row{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:14px}
+  .row .icon{width:20px;height:20px;border-radius:3px;flex:0 0 20px;display:flex;align-items:center;
+    justify-content:center;font-size:9px;font-weight:700;color:#fff}
+  .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .row .nm b{color:var(--text-bright);font-weight:600}
+  .row .pt{color:var(--text-muted);font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 auto}
+  .row .pt2{color:var(--steam-blue);font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 70px;text-align:right}
+  .row .bar{flex:0 0 90px;height:6px;background:#1e1f22;border-radius:3px;overflow:hidden}
+  .row .bar i{display:block;height:100%;background:var(--steam-blue);border-radius:3px}
+
+  /* buttons */
+  .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .btn{
+    background:var(--btn-secondary);color:#fff;border:0;border-radius:3px;
+    padding:8px 14px;font-size:14px;font-weight:500;cursor:pointer;
+    font-family:inherit;min-width:60px;
+  }
+  .btn:hover:not(:disabled){filter:brightness(1.15)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.primary{background:var(--blurple)}
+  .btn.success{background:var(--btn-success)}
+  .btn.danger{background:var(--btn-danger)}
+  .btn.active{background:var(--blurple)}
+  .btn.link{background:transparent;border:1px solid #4e5058;color:var(--text)}
+
+  .eph{color:var(--text-muted);font-size:12px;margin-top:8px;display:flex;align-items:center;gap:6px}
+  .eph::before{content:"👁";font-size:12px}
+
+  /* autocomplete mock */
+  .ac{
+    background:#1e1f22;border-radius:8px;max-width:520px;margin-top:6px;overflow:hidden;
+    box-shadow:0 8px 16px rgba(0,0,0,.4);
+  }
+  .ac-head{padding:8px 12px;color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;border-bottom:1px solid #2b2d31}
+  .ac-item{padding:8px 12px;display:flex;align-items:center;gap:10px;font-size:14px;color:var(--text)}
+  .ac-item.sel{background:#404249;color:var(--text-bright)}
+  .ac-item .owners{margin-left:auto;color:var(--text-muted);font-size:12px}
+  .ac-input{padding:10px 12px;background:#383a40;color:var(--text-bright);font-size:15px;border-radius:4px;margin-top:4px;max-width:520px}
+  .ac-input .caret{border-left:2px solid var(--text-bright);margin-left:1px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  .limits{max-width:1180px;margin:0 auto 60px;padding:16px 20px;background:#2b2d31;border-radius:8px;font-size:13px;color:var(--text-muted)}
+  .limits h3{color:var(--text-bright);font-size:14px;margin:0 0 10px}
+  .limits li{margin:4px 0}
+  .limits code{background:#1e1f22;padding:1px 5px;border-radius:3px;color:var(--steam-blue)}
+</style>
+</head>
+<body>
+
+<div class="note">
+  <b>SteamMatch — UI prototype.</b> Fake data, no network calls. Every screen below is constrained to what Discord
+  can actually render: embed description ≤4096 chars, ≤25 fields, ≤5 buttons per row.
+  The <code>/games list</code> pagination and playtime filters are live — click them.
+  Review the wording and layout here; the bot's embed builders will mirror whatever we agree on.
+</div>
+
+<div class="app">
+  <div class="rail">
+    <div class="server">GG</div>
+    <div class="server alt">+</div>
+  </div>
+
+  <div class="side">
+    <h2>Gaming Buddies</h2>
+    <div class="label">Text channels</div>
+    <div class="chan">general</div>
+    <div class="chan active">steam-match</div>
+    <div class="chan">lfg</div>
+  </div>
+
+  <div class="chat">
+    <div class="chat-header"># steam-match <span>Find people who own what you own</span></div>
+    <div class="messages">
+
+      <!-- 1. LINK SUCCESS -->
+      <div class="screen-label">1 · /steam link — success</div>
+      <div class="msg">
+        <div class="avatar u1">A</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">artur</span><span class="ts">Today at 14:02</span></div>
+          <div class="cmd-line"><span class="slash">/steam link</span> <span class="arg">id_or_url: steamcommunity.com/id/artur</span></div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:02</span></div>
+          <div class="embed ok">
+            <div class="embed-thumb" style="background:linear-gradient(135deg,#c9705a,#8a4a38)">A</div>
+            <div class="embed-author"><div class="pfp"></div>Linked to arturplays</div>
+            <div class="embed-desc">Imported <b>412 purchased games</b>.
+<b>142</b> have more than 30 minutes played — those are the ones used for matching.
+
+You're now discoverable in <b>Gaming Buddies</b>. Use <b>/privacy</b> to hide yourself at any time.</div>
+            <div class="embed-fields">
+              <div class="field"><div class="fname">Total playtime</div><div class="fval">3,847 h</div></div>
+              <div class="field"><div class="fname">Played recently</div><div class="fval">6 games</div></div>
+              <div class="field"><div class="fname">Next refresh</div><div class="fval">in 6 h</div></div>
+            </div>
+            <div class="embed-footer">Steam only exposes games you purchased yourself — family-shared games can't be read by any bot. Why?</div>
+          </div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+      <!-- 2. LINK FAILURES -->
+      <div class="screen-label">2 · /steam link — the two failure states (different problems, different fixes)</div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:05</span></div>
+          <div class="embed err">
+            <div class="embed-title">Your Steam profile is private</div>
+            <div class="embed-desc">I can't see anything on <b>arturplays</b>'s profile.
+
+<b>Fix:</b> Steam → Profile → Edit Profile → Privacy Settings → set <b>My profile</b> to <b>Public</b>, then run the command again.</div>
+            <div class="btns">
+              <button class="btn link">Open Steam privacy settings ↗</button>
+              <button class="btn primary">Try again</button>
+            </div>
+          </div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:06</span></div>
+          <div class="embed warn">
+            <div class="embed-title">Your profile is public, but your game details aren't</div>
+            <div class="embed-desc">This trips up almost everyone — Steam has a <b>separate</b> setting for your games list.
+
+<b>Fix:</b> Steam → Profile → Edit Profile → Privacy Settings → <b>Game details</b> → <b>Public</b>.
+
+Also uncheck <b>"Always keep my total playtime private"</b> just below it, or every game imports as 0 minutes and nothing passes the 30-minute filter.</div>
+            <div class="btns">
+              <button class="btn link">Open Steam privacy settings ↗</button>
+              <button class="btn primary">Try again</button>
+            </div>
+          </div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+      <!-- 3. CONSENT -->
+      <div class="screen-label">3 · Consent prompt — shown once, before anything is stored</div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:01</span></div>
+          <div class="embed">
+            <div class="embed-title">Before I import your library</div>
+            <div class="embed-desc">Here's exactly what happens:
+
+• I store your <b>game names and playtime</b>, and your Steam ID.
+• Members of <b>this server only</b> can see which games you own and how long you've played them.
+• Your Steam ID itself is <b>never</b> shown to anyone.
+• <b>/unlink</b> deletes everything, immediately.
+
+I refresh your library about every 6 hours while you're using the bot.</div>
+            <div class="btns">
+              <button class="btn success">I agree — import my library</button>
+              <button class="btn">Cancel</button>
+            </div>
+          </div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+      <!-- 4. GAMES LIST (interactive) -->
+      <div class="screen-label">4 · /games list — interactive: click the filters and arrows</div>
+      <div class="msg">
+        <div class="avatar u1">A</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">artur</span><span class="ts">Today at 14:10</span></div>
+          <div class="cmd-line"><span class="slash">/games list</span> <span class="arg">min_playtime: 30</span></div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:10</span></div>
+          <div class="embed">
+            <div class="embed-title" id="ls-title">artur's library</div>
+            <div class="embed-desc" id="ls-sub"></div>
+            <div class="rows" id="ls-rows"></div>
+            <div class="embed-footer" id="ls-foot"></div>
+          </div>
+          <div class="btns">
+            <button class="btn" id="ls-prev">◀</button>
+            <button class="btn" id="ls-page" disabled>1/4</button>
+            <button class="btn" id="ls-next">▶</button>
+          </div>
+          <div class="btns">
+            <button class="btn filt active" data-min="30">30m+</button>
+            <button class="btn filt" data-min="60">1h+</button>
+            <button class="btn filt" data-min="300">5h+</button>
+            <button class="btn filt" data-min="600">10h+</button>
+            <button class="btn filt" data-min="0">All</button>
+          </div>
+          <div class="eph">Only you can see this · add <b>public: true</b> to post it in the channel</div>
+        </div>
+      </div>
+
+      <!-- 5. SHARED -->
+      <div class="screen-label">5 · /games shared — overlap with one person</div>
+      <div class="msg">
+        <div class="avatar u1">A</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">artur</span><span class="ts">Today at 14:14</span></div>
+          <div class="cmd-line"><span class="slash">/games shared</span> <span class="arg">user: @mika  min_playtime: 60</span></div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:14</span></div>
+          <div class="embed">
+            <div class="embed-title">artur &amp; mika — 18 games in common</div>
+            <div class="embed-desc">Both played over 1 h. Sorted by whoever's played it least, so the top of the list is what you can actually play together tonight.</div>
+            <div class="rows" id="shared-rows"></div>
+            <div class="embed-footer">Showing 8 of 18 · artur 142 games · mika 96 games</div>
+          </div>
+          <div class="btns">
+            <button class="btn">◀</button><button class="btn" disabled>1/3</button><button class="btn">▶</button>
+            <button class="btn primary">Pick one at random</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. WHO + autocomplete -->
+      <div class="screen-label">6 · /games who — with the autocomplete dropdown</div>
+      <div class="msg">
+        <div class="avatar u2">M</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">mika</span><span class="ts">Today at 14:20</span></div>
+          <div class="ac-input"><span class="slash" style="color:var(--link)">/games who</span> game: deep<span class="caret"></span></div>
+          <div class="ac">
+            <div class="ac-head">Games — 25 max, ranked by owners in this server</div>
+            <div class="ac-item sel"><span>Deep Rock Galactic</span><span class="owners">5 owners</span></div>
+            <div class="ac-item"><span>Deep Rock Galactic: Survivor</span><span class="owners">2 owners</span></div>
+            <div class="ac-item"><span>Deep Sky Derelicts</span><span class="owners">1 owner</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:20</span></div>
+          <div class="embed">
+            <div class="embed-thumb" style="background:linear-gradient(135deg,#d4a017,#8a6a10)">DRG</div>
+            <div class="embed-title"><a href="#">Deep Rock Galactic</a></div>
+            <div class="embed-desc"><b>5 people</b> here have played it for more than 30 minutes.</div>
+            <div class="rows" id="who-rows"></div>
+            <div class="embed-footer">Rock and Stone! · min playtime 30m</div>
+          </div>
+          <div class="btns">
+            <button class="btn primary">Ping these 5</button>
+            <button class="btn link">Store page ↗</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. MATCH -->
+      <div class="screen-label">7 · /match — the headline feature</div>
+      <div class="msg">
+        <div class="avatar u1">A</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">artur</span><span class="ts">Today at 14:26</span></div>
+          <div class="cmd-line"><span class="slash">/match</span> <span class="arg">min_playtime: 30</span></div>
+        </div>
+      </div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:26</span></div>
+          <div class="embed">
+            <div class="embed-title">People most like artur</div>
+            <div class="embed-desc">Ranked across <b>11 linked members</b> of this server, games with 30 m+ on both sides.</div>
+            <div class="rows" id="match-rows"></div>
+            <div class="embed-footer">Overlap = shared games · Taste = shared ÷ combined, which ignores library size</div>
+          </div>
+          <div class="btns">
+            <button class="btn active" id="m-overlap">Rank by overlap</button>
+            <button class="btn" id="m-taste">Rank by taste</button>
+          </div>
+          <div class="eph" style="color:#faa61a">Two ranking modes shown — tell me which one to keep as the default.</div>
+        </div>
+      </div>
+
+      <!-- 8. LEADERBOARD -->
+      <div class="screen-label">8 · /games leaderboard — what this server plays</div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:31</span></div>
+          <div class="embed">
+            <div class="embed-title">Gaming Buddies — most owned games</div>
+            <div class="embed-desc">Games at least 2 members have played for 30 m+.</div>
+            <div class="rows" id="lb-rows"></div>
+            <div class="embed-footer">11 linked members · 1,204 distinct games</div>
+          </div>
+          <div class="btns">
+            <button class="btn">◀</button><button class="btn" disabled>1/5</button><button class="btn">▶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 9. TOKEN REFUSAL -->
+      <div class="screen-label">9 · Refusing a webapi_token — our documented stance</div>
+      <div class="msg">
+        <div class="avatar bot">S</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">Bot</span><span class="ts">Today at 14:40</span></div>
+          <div class="embed err">
+            <div class="embed-title">Never send that to a bot — including me</div>
+            <div class="embed-desc">That looks like a Steam <b>session token</b>. I deleted it without reading it, but you should treat it as compromised.
+
+Any bot asking you to paste one of those can also <b>delete your Steam family group</b> and <b>request purchases</b> with it. That's the standard Steam phishing script, and I will never ask you for one.
+
+I only ever use Steam's public API with my own key — which is also why family-shared games don't show up here.</div>
+            <div class="btns"><button class="btn link">How family sharing works ↗</button></div>
+          </div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="limits">
+  <h3>Constraints this mockup respects</h3>
+  <ul>
+    <li>Embed description ≤ <code>4096</code> chars, ≤ <code>25</code> fields, ≤ <code>6000</code> chars total, ≤ <code>10</code> embeds/message.</li>
+    <li>≤ <code>5</code> buttons per action row, ≤ <code>5</code> rows. The list screen uses 2 rows (nav + filters) — within budget.</li>
+    <li>Autocomplete: ≤ <code>25</code> choices, 3-second hard deadline, <b>cannot be deferred</b> — so it reads only from local SQLite, never Steam.</li>
+    <li>Ephemeral is fixed at the first ack and can't be changed later, hence the <code>public: true</code> option on <code>/games list</code>.</li>
+    <li>Playtime is stored in minutes everywhere, exactly as Steam returns it.</li>
+  </ul>
+</div>
+
+<script>
+// ---- fake data -------------------------------------------------------------
+const C = ['#c9705a','#5a8fc9','#7a5ac9','#5ac98f','#c95a9c','#c9a35a','#5ac9c2','#8fc95a'];
+const col = (i) => C[i % C.length];
+const initials = (n) => n.replace(/[^A-Za-z0-9 ]/g,'').split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+
+// artur's library: minutes, as Steam reports it
+const LIB = [
+  ['Deep Rock Galactic',24720],['Team Fortress 2',12045],['Counter-Strike 2',14400],
+  ['Factorio',17280],['RimWorld',11400],['Rust',9300],['Baldur’s Gate 3',8880],
+  ['Satisfactory',7500],['Elden Ring',6720],['The Witcher 3: Wild Hunt',6300],
+  ['Terraria',5820],['Cyberpunk 2077',5400],['Garry’s Mod',5100],['Helldivers 2',4800],
+  ['Stardew Valley',4560],['Kerbal Space Program',4380],['Valheim',4200],
+  ['Project Zomboid',3900],['Oxygen Not Included',3780],['Dota 2',3600],
+  ['Hades',3240],['Risk of Rain 2',3300],['Sea of Thieves',3120],
+  ['Slay the Spire',2940],['Left 4 Dead 2',2760],['Subnautica',2640],
+  ['No Man’s Sky',2400],['Lethal Company',2280],['Cities: Skylines',2160],
+  ['Hollow Knight',2100],['Portal 2',1980],['Dead Cells',1860],
+  ['Phasmophobia',1680],['Vampire Survivors',1620],['Raft',1500],['Celeste',1440],
+  ['Grounded',1260],['Euro Truck Simulator 2',1140],['Half-Life 2',900],
+  ['Among Us',720],['Portal',480],['Superhot',45],
+  ['The Stanley Parable',25],['Doki Doki Literature Club',20],
+].map(([name,mins],i)=>({name,mins,i}));
+
+const fmt = (m) => m < 60 ? m + 'm' : (m/60) >= 100 ? Math.round(m/60)+' h' : (m/60).toFixed(1)+' h';
+
+function gameRow(name, mins, idx, max, extra) {
+  const pct = Math.max(3, Math.round(100*mins/max));
+  return `<div class="row">
+    <div class="icon" style="background:${col(idx)}">${initials(name)}</div>
+    <div class="nm"><b>${name}</b></div>
+    ${extra || ''}
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="pt">${fmt(mins)}</div>
+  </div>`;
+}
+
+// ---- screen 4: interactive list -------------------------------------------
+const PAGE = 10;
+let minPT = 30, page = 0;
+
+function renderList(){
+  const rows = LIB.filter(g => g.mins > minPT).sort((a,b)=>b.mins-a.mins);
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
+  page = Math.min(page, pages-1);
+  const slice = rows.slice(page*PAGE, page*PAGE+PAGE);
+  const max = rows.length ? rows[0].mins : 1;
+  const total = rows.reduce((s,g)=>s+g.mins,0);
+
+  document.getElementById('ls-sub').innerHTML =
+    `<b>${rows.length}</b> games over ${fmt(minPT)} · ${Math.round(total/60).toLocaleString()} h total`;
+  document.getElementById('ls-rows').innerHTML = slice.map(g=>gameRow(g.name,g.mins,g.i,max)).join('');
+  document.getElementById('ls-foot').textContent =
+    `Page ${page+1}/${pages} · synced 2 h ago · 412 games owned, ${rows.length} above the filter`;
+  document.getElementById('ls-page').textContent = `${page+1}/${pages}`;
+  document.getElementById('ls-prev').disabled = page === 0;
+  document.getElementById('ls-next').disabled = page >= pages-1;
+}
+document.getElementById('ls-prev').onclick = () => { page--; renderList(); };
+document.getElementById('ls-next').onclick = () => { page++; renderList(); };
+document.querySelectorAll('.filt').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.filt').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  minPT = +b.dataset.min; page = 0; renderList();
+});
+renderList();
+
+// ---- screen 5: shared ------------------------------------------------------
+const SHARED = [
+  ['Deep Rock Galactic',24720,18600],['Helldivers 2',4800,9120],['Valheim',4200,7800],
+  ['Baldur’s Gate 3',8880,5400],['Sea of Thieves',3120,4980],['Terraria',5820,3900],
+  ['Lethal Company',2280,3600],['Stardew Valley',4560,2400],
+];
+const smax = Math.max(...SHARED.flatMap(r=>[r[1],r[2]]));
+document.getElementById('shared-rows').innerHTML = SHARED.map(([n,a,b],i)=>{
+  const w = Math.min(a,b);
+  return `<div class="row">
+    <div class="icon" style="background:${col(i)}">${initials(n)}</div>
+    <div class="nm"><b>${n}</b></div>
+    <div class="pt">${fmt(a)}</div>
+    <div class="bar"><i style="width:${Math.max(3,Math.round(100*w/smax))}%"></i></div>
+    <div class="pt2">${fmt(b)}</div>
+  </div>`;
+}).join('');
+
+// ---- screen 6: who ---------------------------------------------------------
+const WHO = [['artur',24720],['jonas',15300],['mika',18600],['pia',3400],['sam',95]];
+const wmax = Math.max(...WHO.map(w=>w[1]));
+document.getElementById('who-rows').innerHTML = WHO.sort((a,b)=>b[1]-a[1]).map(([u,m],i)=>
+  `<div class="row">
+    <div class="icon" style="background:${col(i+2)}">${u[0].toUpperCase()}</div>
+    <div class="nm">@${u}</div>
+    <div class="bar"><i style="width:${Math.max(3,Math.round(100*m/wmax))}%"></i></div>
+    <div class="pt">${fmt(m)}</div>
+  </div>`).join('');
+
+// ---- screen 7: match -------------------------------------------------------
+const MATCH = [
+  {u:'mika', overlap:68, lib:96,  top:'Deep Rock Galactic'},
+  {u:'jonas',overlap:54, lib:310, top:'Factorio'},
+  {u:'pia',  overlap:31, lib:44,  top:'Stardew Valley'},
+  {u:'sam',  overlap:27, lib:38,  top:'Hollow Knight'},
+  {u:'lena', overlap:22, lib:512, top:'RimWorld'},
+];
+const MINE = 142;
+function renderMatch(mode){
+  const rows = MATCH.map(m => ({...m, taste: m.overlap/(MINE + m.lib - m.overlap)}))
+    .sort((a,b) => mode==='taste' ? b.taste-a.taste : b.overlap-a.overlap);
+  const max = mode==='taste' ? rows[0].taste : rows[0].overlap;
+  document.getElementById('match-rows').innerHTML = rows.map((m,i)=>{
+    const v = mode==='taste' ? m.taste : m.overlap;
+    const lbl = mode==='taste' ? (m.taste*100).toFixed(0)+'%' : m.overlap+' games';
+    return `<div class="row">
+      <div class="icon" style="background:${col(i+1)}">${m.u[0].toUpperCase()}</div>
+      <div class="nm"><b>@${m.u}</b> <span style="color:var(--text-muted)">· top pick ${m.top}</span></div>
+      <div class="bar"><i style="width:${Math.max(4,Math.round(100*v/max))}%"></i></div>
+      <div class="pt2">${lbl}</div>
+    </div>`;
+  }).join('');
+}
+document.getElementById('m-overlap').onclick = function(){
+  this.classList.add('active'); document.getElementById('m-taste').classList.remove('active'); renderMatch('overlap');
+};
+document.getElementById('m-taste').onclick = function(){
+  this.classList.add('active'); document.getElementById('m-overlap').classList.remove('active'); renderMatch('taste');
+};
+renderMatch('overlap');
+
+// ---- screen 8: leaderboard -------------------------------------------------
+const LB = [
+  ['Counter-Strike 2',9,'2,140 h'],['Deep Rock Galactic',5,'1,010 h'],
+  ['Terraria',5,'420 h'],['Baldur’s Gate 3',4,'690 h'],
+  ['Helldivers 2',4,'380 h'],['Stardew Valley',4,'240 h'],
+  ['Valheim',3,'310 h'],['Lethal Company',3,'120 h'],
+];
+document.getElementById('lb-rows').innerHTML = LB.map(([n,o,h],i)=>
+  `<div class="row">
+    <div class="icon" style="background:${col(i)}">${initials(n)}</div>
+    <div class="nm"><b>${n}</b></div>
+    <div class="bar"><i style="width:${Math.round(100*o/9)}%"></i></div>
+    <div class="pt2">${o} own</div>
+    <div class="pt">${h}</div>
+  </div>`).join('');
+</script>
+</body>
+</html>

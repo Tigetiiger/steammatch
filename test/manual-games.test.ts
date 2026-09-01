@@ -1,0 +1,280 @@
+import Database from 'better-sqlite3';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { applySchema, openDb } from '../src/db/index.js';
+import {
+  addUserGame, ensureUser, findMatches, guildCatalog, leaderboard, linkSteam,
+  listGames, removeUserGame, setOptedIn, sharedGames, touchGuildMember,
+  upsertManualGame, userManualGames, whoOwns,
+} from '../src/db/queries.js';
+import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
+import type { LibraryResult, OwnedGame } from '../src/types.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const G = 'guild-1';
+const A = 'U_a';
+const B = 'U_b';
+
+const g = (appid: number, name: string, mins: number): OwnedGame => ({
+  appid, name, playtimeForever: mins, playtime2Weeks: 0, iconHash: '',
+});
+const source = (games: OwnedGame[]): LibrarySource => ({
+  async fetchLibrary(): Promise<LibraryResult> {
+    // A real fetchLibrary never reports 'public' with an empty list -- that
+    // shape is classified 'empty' (or 'error'), so mirror it here.
+    return {
+      state: games.length === 0 ? 'empty' : 'public',
+      personaName: 'p',
+      avatarUrl: null,
+      games,
+    };
+  },
+});
+
+let db: Database.Database;
+beforeEach(() => {
+  db = new Database(':memory:');
+  applySchema(db);
+  for (const u of [A, B]) {
+    ensureUser(db, u);
+    setOptedIn(db, u, true);
+    touchGuildMember(db, G, u);
+  }
+});
+
+describe('the manual game catalogue', () => {
+  it('gives manual games negative ids so they cannot collide with Steam appids', () => {
+    const mc = upsertManualGame(db, 'Minecraft');
+    expect(mc.appid).toBeLessThan(0);
+    expect(upsertManualGame(db, 'Terraria').appid).toBeLessThan(mc.appid);
+  });
+
+  it('deduplicates on the folded name so everyone shares one entry', () => {
+    const a = upsertManualGame(db, 'Minecraft');
+    const b = upsertManualGame(db, '  MINECRAFT  ');
+    const c = upsertManualGame(db, 'minecraft');
+    expect(new Set([a.appid, b.appid, c.appid]).size).toBe(1);
+    expect(a.created).toBe(true);
+    expect(b.created).toBe(false);
+    expect(c.created).toBe(false);
+  });
+});
+
+describe('manual games ignore every playtime filter', () => {
+  let mc: number;
+  beforeEach(() => {
+    mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    addUserGame(db, B, mc);
+  });
+
+  it('shows in /games list at any threshold', () => {
+    for (const min of [0, 30, 600, 100_000]) {
+      expect(listGames(db, A, min, 50, 0).map((r) => r.appid)).toContain(mc);
+    }
+  });
+
+  it('marks the row as untracked so the UI can say why it has no hours', () => {
+    const row = listGames(db, A, 0, 50, 0).find((r) => r.appid === mc)!;
+    expect(row.tracked).toBe(false);
+    expect(row.playtime).toBe(0);
+  });
+
+  it('shows in /games who, /games shared, /match and the leaderboard', () => {
+    expect(whoOwns(db, G, mc, 100_000, 10).map((r) => r.userId).sort()).toEqual([A, B]);
+    expect(sharedGames(db, G, A, B, 100_000).map((r) => r.appid)).toContain(mc);
+    expect(leaderboard(db, G, 100_000, 2, 10).map((r) => r.appid)).toContain(mc);
+
+    for (let i = 1; i <= 3; i++) {
+      const x = upsertManualGame(db, `Game ${i}`).appid;
+      addUserGame(db, A, x);
+      addUserGame(db, B, x);
+    }
+    const m = findMatches(db, G, A, 100_000, 10);
+    expect(m.map((r) => r.userId)).toContain(B);
+  });
+
+  it('sorts after games that have real playtime', async () => {
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 5000)]));
+    const rows = listGames(db, A, -1, 50, 0);
+    expect(rows[0]!.name).toBe('Factorio');
+    expect(rows[rows.length - 1]!.appid).toBe(mc);
+  });
+});
+
+describe('Steam sync and manual games coexist', () => {
+  it('a Steam sync does not delete manually added games', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    linkSteam(db, A, '76561198000000001');
+
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([mc, 10].sort());
+
+    // Two confirming empty answers are needed before Steam rows are cleared
+    // (one bad response must never wipe a library) -- and Minecraft, being
+    // untracked, must survive even that.
+    await syncLibrary(db, A, '76561198000000001', source([]));
+    await syncLibrary(db, A, '76561198000000001', source([]));
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([mc]);
+  });
+
+  it('adding a game you already own from Steam never clobbers real playtime', async () => {
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 5000)]));
+
+    expect(addUserGame(db, A, 10)).toBe(false); // already present
+    const row = listGames(db, A, -1, 50, 0).find((r) => r.appid === 10)!;
+    expect(row.playtime).toBe(5000);
+    expect(row.tracked).toBe(true);
+  });
+});
+
+describe('the server catalogue', () => {
+  it('offers games other people have that you do not, and drops them once you do', () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, B, mc);
+
+    expect(guildCatalog(db, G, A).map((c) => c.name)).toEqual(['Minecraft']);
+    expect(guildCatalog(db, G, A)[0]!.owners).toBe(1);
+
+    addUserGame(db, A, mc);
+    expect(guildCatalog(db, G, A)).toEqual([]);
+    expect(guildCatalog(db, G, B)).toEqual([]);
+  });
+
+  it('never offers games from another guild, or from hidden members', () => {
+    const other = upsertManualGame(db, 'Other Guild Game').appid;
+    ensureUser(db, 'U_far');
+    setOptedIn(db, 'U_far', true);
+    touchGuildMember(db, 'guild-2', 'U_far');
+    addUserGame(db, 'U_far', other);
+
+    expect(guildCatalog(db, G, A)).toEqual([]);
+
+    const hidden = upsertManualGame(db, 'Hidden Game').appid;
+    addUserGame(db, B, hidden);
+    setOptedIn(db, B, false);
+    expect(guildCatalog(db, G, A)).toEqual([]);
+  });
+});
+
+describe('removing manual games', () => {
+  it('lists and removes only hand-added games', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+
+    expect(userManualGames(db, A).map((x) => x.name)).toEqual(['Minecraft']);
+
+    expect(removeUserGame(db, A, mc)).toBe(true);
+    expect(removeUserGame(db, A, mc)).toBe(false);
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([10]);
+  });
+});
+
+describe('migration onto an existing database', () => {
+  it('adds source and playtime_tracked, defaulting old rows to Steam-tracked', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'sm-')), 'old.sqlite');
+    const old = new Database(path);
+    old.exec(`
+      CREATE TABLE users (user_id TEXT PRIMARY KEY, opted_in INTEGER NOT NULL DEFAULT 0,
+        discoverable INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at INTEGER) STRICT;
+      CREATE TABLE games (appid INTEGER PRIMARY KEY, name TEXT NOT NULL,
+        name_folded TEXT NOT NULL, icon_hash TEXT NOT NULL DEFAULT '',
+        last_seen_at INTEGER NOT NULL DEFAULT (unixepoch())) STRICT;
+      CREATE TABLE user_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL,
+        playtime_forever INTEGER NOT NULL DEFAULT 0, playtime_2weeks INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY (user_id, appid))
+        STRICT, WITHOUT ROWID;
+    `);
+    old.prepare('INSERT INTO users (user_id, opted_in) VALUES (?,1)').run('legacy');
+    old.prepare('INSERT INTO games (appid,name,name_folded) VALUES (10,?,?)').run('Factorio', 'factorio');
+    old.prepare('INSERT INTO user_games (user_id,appid,playtime_forever) VALUES (?,10,999)').run('legacy');
+    old.close();
+
+    const db2 = openDb(path);
+    // The pre-existing Steam game keeps real playtime and stays tracked.
+    const row = listGames(db2, 'legacy', 30, 10, 0)[0]!;
+    expect(row).toMatchObject({ appid: 10, playtime: 999, tracked: true });
+    // And the new manual path works on the migrated database.
+    const mc = upsertManualGame(db2, 'Minecraft').appid;
+    addUserGame(db2, 'legacy', mc);
+    expect(listGames(db2, 'legacy', 100_000, 10, 0).map((r) => r.appid)).toEqual([mc]);
+    db2.close();
+  });
+});
+
+describe('the "my games" leaderboard', () => {
+  it('ranks only my games, and only ones somebody else here also has', () => {
+    const shared = upsertManualGame(db, 'Shared Game').appid;
+    const solo = upsertManualGame(db, 'Only Mine').appid;
+    const theirs = upsertManualGame(db, 'Only Theirs').appid;
+
+    addUserGame(db, A, shared);
+    addUserGame(db, B, shared);
+    addUserGame(db, A, solo);
+    addUserGame(db, B, theirs);
+
+    const board = leaderboard(db, G, 0, 2, 25, A).map((r) => r.appid);
+    expect(board).toEqual([shared]);
+    expect(board).not.toContain(solo);   // nobody shares it
+    expect(board).not.toContain(theirs); // not mine
+
+    // The whole-server board is unaffected by the scoping.
+    expect(leaderboard(db, G, 0, 2, 25).map((r) => r.appid)).toEqual([shared]);
+  });
+
+  it('counts include me, so a shared game reads as 2 people', () => {
+    const x = upsertManualGame(db, 'Co-op').appid;
+    addUserGame(db, A, x);
+    addUserGame(db, B, x);
+    expect(leaderboard(db, G, 0, 2, 25, A)[0]!.owners).toBe(2);
+  });
+});
+
+describe('playtime is shown only in /games list', () => {
+  it('renders a hand-added game as "added by hand", never as 0m', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    const { libraryEmbed } = await import('../src/ui/embeds.js');
+    const out = libraryEmbed({
+      displayName: 'a',
+      pageRows: listGames(db, A, -1, 10, 0),
+      offset: 0, page: 0, pages: 1, matching: 1, matchingMinutes: 0,
+      ownedTotal: 1, filter: 30, syncedAgo: null,
+    }).toJSON();
+    const row = (out.description ?? '').split('\n').at(-1)!;
+    expect(row).toContain('added by hand');
+    // The row must not claim a measured 0 -- that would read as "never played".
+    expect(row).not.toMatch(/0m|0 h/);
+  });
+
+  it('omits playtime from shared, who and the leaderboard', async () => {
+    const e = await import('../src/ui/embeds.js');
+    const shared = e.sharedEmbed({
+      meName: 'a', themName: 'b',
+      pageRows: [{ appid: 1, name: 'Factorio', mine: 24720, theirs: 18600, tracked: true }],
+      offset: 0, page: 0, pages: 1, total: 1, myLibrarySize: 5, theirLibrarySize: 5, filter: 30,
+    }).toJSON();
+    expect(shared.description).not.toMatch(/412 h|310 h|\d+ h`/);
+
+    const who = e.whoEmbed({
+      appid: 1, name: 'Factorio', filter: 30, iconUrl: null, storeUrl: 'https://x',
+      owners: [{ userId: '1', playtime: 24720, personaName: null, addedBy: null }],
+    }).toJSON();
+    expect(who.description).not.toMatch(/\d+ h/);
+
+    const board = e.leaderboardEmbed({
+      guildName: 'G',
+      pageRows: [{ appid: 1, name: 'Factorio', owners: 4, guildMinutes: 128400 }],
+      offset: 0, page: 0, pages: 1, memberCount: 4, distinctGames: 1, filter: 30,
+    }).toJSON();
+    expect(board.description).toContain('4 people');
+    expect(board.description).not.toMatch(/\d[\d,]* h/);
+  });
+});
