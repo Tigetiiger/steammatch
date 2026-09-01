@@ -17,8 +17,9 @@ import steam from './steam.js';
 import games from './games.js';
 import match from './match.js';
 import privacy from './privacy.js';
+import roles from './roles.js';
 
-export const commands: Command[] = [steam, games, match, privacy];
+export const commands: Command[] = [steam, games, match, privacy, roles];
 
 export const commandMap = new Collection<string, Command>(
   commands.map((c) => [c.data.name, c] as const),

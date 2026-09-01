@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { applySchema, openDb } from '../src/db/index.js';
 import {
   addUserGame, ensureUser, findMatches, guildCatalog, leaderboard, linkSteam,
-  listGames, removeUserGame, setOptedIn, sharedGames, touchGuildMember,
-  upsertManualGame, userManualGames, whoOwns,
+  listGames, removeUserGame, searchGamesForAutocomplete, setOptedIn, sharedGames,
+  touchGuildMember, upsertManualGame, userManualGames, whoOwns,
 } from '../src/db/queries.js';
 import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
 import type { LibraryResult, OwnedGame } from '../src/types.js';
@@ -238,7 +238,7 @@ describe('the "my games" leaderboard', () => {
 });
 
 describe('playtime is shown only in /games list', () => {
-  it('renders a hand-added game as "added by hand", never as 0m', async () => {
+  it('renders a hand-added game as "käsitsi lisatud", never as 0 min', async () => {
     const mc = upsertManualGame(db, 'Minecraft').appid;
     addUserGame(db, A, mc);
     const { libraryEmbed } = await import('../src/ui/embeds.js');
@@ -249,9 +249,9 @@ describe('playtime is shown only in /games list', () => {
       ownedTotal: 1, filter: 30, syncedAgo: null,
     }).toJSON();
     const row = (out.description ?? '').split('\n').at(-1)!;
-    expect(row).toContain('added by hand');
+    expect(row).toContain('käsitsi lisatud');
     // The row must not claim a measured 0 -- that would read as "never played".
-    expect(row).not.toMatch(/0m|0 h/);
+    expect(row).not.toMatch(/0 min|0 h/);
   });
 
   it('omits playtime from shared, who and the leaderboard', async () => {
@@ -274,7 +274,74 @@ describe('playtime is shown only in /games list', () => {
       pageRows: [{ appid: 1, name: 'Factorio', owners: 4, guildMinutes: 128400 }],
       offset: 0, page: 0, pages: 1, memberCount: 4, distinctGames: 1, filter: 30,
     }).toJSON();
-    expect(board.description).toContain('4 people');
-    expect(board.description).not.toMatch(/\d[\d,]* h/);
+    expect(board.description).toContain('4 inimest');
+    expect(board.description).not.toMatch(/\d[\d ]* h/);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('manual games are reachable from /games who', () => {
+  /**
+   * The synthetic appid of a manual game is NEGATIVE. Autocomplete offers the
+   * game and sends that appid back as the option's value, so every step that
+   * parses or renders an appid has to survive a leading minus sign.
+   */
+  it('parses a negative appid the way /games who does', () => {
+    // The exact predicate from whoSub. A `^\d` version silently rejected every
+    // manual game, fell through to a name search for the literal text "-1",
+    // and told the user nobody owned the game it had just suggested.
+    const parse = (raw: string) => (/^-?\d{1,10}$/.test(raw) ? Number.parseInt(raw, 10) : null);
+
+    expect(parse('-1')).toBe(-1);
+    expect(parse('-4242')).toBe(-4242);
+    expect(parse('440')).toBe(440);
+    // Still not an appid.
+    expect(parse('minecraft')).toBeNull();
+    expect(parse('-')).toBeNull();
+    expect(parse('')).toBeNull();
+  });
+
+  it('offers a manual game through autocomplete, keyed by its negative appid', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    expect(mc).toBeLessThan(0);
+    addUserGame(db, A, mc);
+    addUserGame(db, B, mc);
+
+    const hits = searchGamesForAutocomplete(db, G, 'minecraft', 25);
+    expect(hits).toEqual([{ appid: mc, name: 'Minecraft', owners: 2 }]);
+
+    // ...and the query behind the answer finds both owners.
+    expect(whoOwns(db, G, mc, 30, 25).map((o) => o.userId).sort()).toEqual([A, B].sort());
+  });
+
+  it('renders without a store link, since a manual game has no store page', async () => {
+    const e = await import('../src/ui/embeds.js');
+    const who = e.whoEmbed({
+      appid: -1,
+      name: 'Minecraft',
+      filter: 30,
+      iconUrl: null,
+      // https://store.steampowered.com/app/-1 is a 404 wearing the game's name.
+      storeUrl: null,
+      owners: [{ userId: '1', playtime: 0, personaName: null, addedBy: null }],
+    }).toJSON();
+    expect(who.url).toBeUndefined();
+    expect(who.title).toBe('Minecraft');
+
+    const row = e.whoRow('abc12345', 1, null).toJSON();
+    expect(row.components).toHaveLength(1);
+    expect(row.components.every((c) => 'custom_id' in c)).toBe(true);
+
+    // A Steam game still gets the button.
+    const steamRow = e.whoRow('abc12345', 1, 'https://store.steampowered.com/app/440').toJSON();
+    expect(steamRow.components).toHaveLength(2);
+  });
+
+  it('never emits an empty action row, which Discord rejects', async () => {
+    const e = await import('../src/ui/embeds.js');
+    // No owners and no store page: the row has nothing in it, so whoSub must
+    // send `components: []` rather than a row with zero components.
+    expect(e.whoRow('abc12345', 0, null).components).toHaveLength(0);
   });
 });

@@ -1,22 +1,30 @@
 /**
  * Bot entrypoint.
  *
- * Intents: Guilds ONLY. INTERACTION_CREATE is not intent-gated, and the USER
- * option on /games shared resolves straight out of the interaction payload, so
- * this bot needs no privileged intents at all — no GuildMembers, no
- * MessageContent. That is also why the Steam-token refusal is wired into our own
- * command options instead of a message listener.
+ * Intents: Guilds + GuildMessageReactions. Still NO PRIVILEGED intents — no
+ * GuildMembers, no MessageContent, nothing to toggle in the Developer Portal.
+ * INTERACTION_CREATE is not intent-gated, and the USER option on /games shared
+ * resolves straight out of the interaction payload. That is also why the
+ * Steam-token refusal is wired into our own command options rather than a
+ * message listener.
+ *
+ * GuildMessageReactions exists solely for /roles, and it is what forces the
+ * `partials` below: a reaction on a message the bot has not cached since it
+ * started — which is every message written before the last restart — arrives
+ * with only an id unless the client is told to accept partial structures.
+ * Without this, role panels work in testing and stop working after a deploy.
  */
 
-import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
-import type { Interaction } from 'discord.js';
+import { Client, Events, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
+import type { GuildMember, Interaction } from 'discord.js';
 import { openDb } from './db/index.js';
 import { SteamClient } from './steam/client.js';
-import { startRefresher } from './steam/refresher.js';
 import { commandMap } from './commands/registry.js';
 import {  type BotContext } from './commands/index.js';
 import { COLORS, noticeEmbed } from './ui/embeds.js';
 import { hasSession } from './ui/paginate.js';
+import { applyReaction, type ReactionAction } from './roles/handler.js';
+import { forgetRole } from './roles/store.js';
 
 function required(name: string): string {
   const v = process.env[name];
@@ -37,16 +45,54 @@ const ctx: BotContext = {
   steamApiKey,
 };
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessageReactions],
+  partials: [Partials.Message, Partials.Reaction, Partials.User],
+});
 
 client.once(Events.ClientReady, (c) => {
   console.log(`Ready as ${c.user.tag} · ${commandMap.size} commands loaded`);
-  // Keeps the promise made by the consent screen and the "Next refresh" field.
-  startRefresher(ctx.db, ctx.steam);
+  // Deliberately nothing else. Steam is contacted only when a person asks:
+  // once at import, and thereafter only from /steam update. There is no
+  // background crawl, so nothing is started here.
 });
 
 client.on(Events.InteractionCreate, (interaction: Interaction) => {
   void route(interaction);
+});
+
+/* ---- reaction roles ------------------------------------------------------ */
+
+/**
+ * Best-effort DM. A reaction handler has no interaction to reply to, so this is
+ * the only channel back to the person — and it fails silently and often,
+ * because most people have server DMs closed. Never awaited for correctness.
+ */
+async function notify(member: GuildMember, text: string): Promise<void> {
+  await member.send({ embeds: [noticeEmbed('Rolli ei saanud anda', text, COLORS.warn)] }).catch(() => {});
+}
+
+function onReaction(action: ReactionAction) {
+  return (reaction: Parameters<typeof applyReaction>[1], user: Parameters<typeof applyReaction>[2]) => {
+    void applyReaction({ db: ctx.db, notify }, reaction, user, action).catch((err) => {
+      console.error(`[roles] ${action} handler failed`, err);
+    });
+  };
+}
+
+client.on(Events.MessageReactionAdd, onReaction('add'));
+client.on(Events.MessageReactionRemove, onReaction('remove'));
+
+// A deleted role leaves bindings pointing at nothing. Dropping them here keeps
+// the panel honest; without it the listing shows a role mention that renders as
+// a raw @&id and reacting does nothing.
+client.on(Events.GuildRoleDelete, (role) => {
+  try {
+    const n = forgetRole(ctx.db, role.guild.id, role.id);
+    if (n > 0) console.log(`[roles] dropped ${n} binding(s) for deleted role ${role.id}`);
+  } catch (err) {
+    console.error('[roles] could not clean up a deleted role', err);
+  }
 });
 
 async function route(interaction: Interaction): Promise<void> {
@@ -74,15 +120,15 @@ async function route(interaction: Interaction): Promise<void> {
     // (bot restarted, collector expired) and the stateless "Try again" button
     // are handled here.
     const sessionId = interaction.customId.split(':')[1] ?? '';
-    if (/^(pg|pf|px|gp|consent):/.test(interaction.customId) && hasSession(sessionId)) return;
+    if (/^(pg|pf|px|gp|cl|consent):/.test(interaction.customId) && hasSession(sessionId)) return;
 
     if (interaction.customId.startsWith('retry:')) {
       await interaction
         .reply({
           embeds: [
             noticeEmbed(
-              'Ready when you are',
-              'Once the Steam setting is changed, run **/games add** and sync again with the same profile URL.',
+              'Valmis, kui sina oled',
+              'Kui Steami säte on muudetud, käivita **/games add** ja sisesta sama profiili aadress uuesti.',
               COLORS.brand,
             ),
           ],
@@ -91,10 +137,10 @@ async function route(interaction: Interaction): Promise<void> {
         .catch(() => {});
       return;
     }
-    if (/^(pg|pf|px|gp|consent):/.test(interaction.customId)) {
+    if (/^(pg|pf|px|gp|cl|consent):/.test(interaction.customId)) {
       await interaction
         .reply({
-          content: 'That message is too old for me to update. Run the command again.',
+          content: 'See sõnum on liiga vana, et seda uuendada. Käivita käsk uuesti.',
           flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
@@ -103,7 +149,8 @@ async function route(interaction: Interaction): Promise<void> {
   }
 
   /* ---- select menus ------------------------------------------------------ */
-  // Owned by the /games add panel's collector, same as the buttons above.
+  // Owned by the /games add panel's and the checklist's collectors, same as the
+  // buttons above.
   if (interaction.isStringSelectMenu()) return;
 
   /* ---- slash commands ---------------------------------------------------- */
@@ -122,8 +169,8 @@ async function route(interaction: Interaction): Promise<void> {
     const payload = {
       embeds: [
         noticeEmbed(
-          'Something broke on my side',
-          'That is a bug, not something you did. Try again in a moment — if it keeps happening it is worth reporting.',
+          'Midagi läks minu poolel katki',
+          'See on viga minus, mitte sinus. Proovi hetke pärast uuesti.',
           COLORS.err,
         ),
       ],

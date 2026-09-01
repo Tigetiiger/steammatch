@@ -70,13 +70,14 @@ function panelComponents(sid: string, catalog: { appid: number; name: string; ow
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`gp:${sid}:pick`)
-          .setPlaceholder('Games people here already have — pick any you play')
+          .setPlaceholder('Mängud, mis teistel siin juba on — vali, mida sa mängid')
           .setMinValues(1)
           .setMaxValues(Math.min(catalog.length, CATALOG_LIMIT))
           .addOptions(
             catalog.slice(0, CATALOG_LIMIT).map((c) => ({
               label: gameName(c.name, 100),
-              description: `${c.owners} ${c.owners === 1 ? 'person has' : 'people have'} this`,
+              // Estonian uses the adessive for both numbers, so no plural split.
+              description: `${c.owners} inimesel on see olemas`,
               value: String(c.appid),
             })),
           ),
@@ -87,7 +88,7 @@ function panelComponents(sid: string, catalog: { appid: number; name: string; ow
   const buttons = [
     new ButtonBuilder()
       .setCustomId(`gp:${sid}:steam`)
-      .setLabel('Sync Steam library')
+      .setLabel('Impordi Steami kogu')
       .setStyle(ButtonStyle.Primary),
     ...QUICK_ADD_GAMES.map((q, i) =>
       new ButtonBuilder()
@@ -98,11 +99,11 @@ function panelComponents(sid: string, catalog: { appid: number; name: string; ow
     ),
     new ButtonBuilder()
       .setCustomId(`gp:${sid}:manual`)
-      .setLabel('Add another game')
+      .setLabel('Lisa muu mäng')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`gp:${sid}:remove`)
-      .setLabel('Remove')
+      .setLabel('Eemalda')
       .setStyle(ButtonStyle.Secondary),
   ].slice(0, 5); // one action row, Discord's hard limit
 
@@ -148,7 +149,7 @@ export async function openAddPanel(
     // Checked here, not in `filter`: a rejected filter leaves the interaction
     // unacknowledged and the clicker sees a failure.
     if (i.user.id !== actorId) {
-      await i.reply({ content: 'This panel is not yours.', flags: MessageFlags.Ephemeral });
+      await i.reply({ content: 'See paneel pole sinu oma.', flags: MessageFlags.Ephemeral });
       return;
     }
     const action = i.customId.split(':')[2] ?? '';
@@ -205,13 +206,13 @@ async function handleSteam(
   await i.showModal(
     new ModalBuilder()
       .setCustomId(modalId)
-      .setTitle('Sync a Steam library')
+      .setTitle('Impordi Steami kogu')
       .addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder()
             .setCustomId('id_or_url')
-            .setLabel('Steam profile URL, vanity name or ID64')
-            .setPlaceholder('steamcommunity.com/id/yourname')
+            .setLabel('Steami profiili aadress, nimi või ID64')
+            .setPlaceholder('steamcommunity.com/id/sinunimi')
             .setStyle(TextInputStyle.Short)
             .setRequired(true)
             .setMaxLength(200),
@@ -239,12 +240,12 @@ async function handleManual(
   await i.showModal(
     new ModalBuilder()
       .setCustomId(modalId)
-      .setTitle('Add a game')
+      .setTitle('Lisa mäng')
       .addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder()
             .setCustomId('name')
-            .setLabel('Game name')
+            .setLabel('Mängu nimi')
             .setPlaceholder('Minecraft')
             .setStyle(TextInputStyle.Short)
             .setRequired(true)
@@ -261,7 +262,7 @@ async function handleManual(
   const raw = submit.fields.getTextInputValue('name').trim();
   if (!raw) {
     await submit.reply({
-      embeds: [noticeEmbed('That name was empty', 'Give the game a name and try again.', COLORS.warn)],
+      embeds: [noticeEmbed('Nimi oli tühi', 'Sisesta mängu nimi ja proovi uuesti.', COLORS.warn)],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -272,10 +273,10 @@ async function handleManual(
   await submit.reply({
     embeds: [
       noticeEmbed(
-        added ? `Added ${gameName(game.name, 80)}` : `You already had ${gameName(game.name, 80)}`,
+        added ? `Lisatud: ${gameName(game.name, 80)}` : `See oli sul juba: ${gameName(game.name, 80)}`,
         game.created
-          ? 'Nobody here had listed that one — it is now a one-click option for everyone else in this server.'
-          : 'Picked up the entry other people here are already using.',
+          ? 'Keegi siin polnud seda veel lisanud — nüüd saavad teised selle ühe klikiga valida.'
+          : 'Kasutasin kirjet, mis teistel siin juba olemas oli.',
         added ? COLORS.ok : COLORS.warn,
       ),
     ],
@@ -295,8 +296,8 @@ async function handleRemove(
     await i.reply({
       embeds: [
         noticeEmbed(
-          'Nothing to remove',
-          'This only removes games added by hand. Steam games come back on the next sync — use **/steam unlink** to drop those.',
+          'Pole midagi eemaldada',
+          'Siit saab eemaldada ainult käsitsi lisatud mänge. Steami mängude jaoks kasuta **/steam unlink**.',
           COLORS.warn,
         ),
       ],
@@ -307,12 +308,12 @@ async function handleRemove(
 
   const pickId = `gpr:${i.id}`;
   await i.reply({
-    content: 'Which one should go?',
+    content: 'Milline peaks kaduma?',
     components: [
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(pickId)
-          .setPlaceholder('Pick games to remove')
+          .setPlaceholder('Vali eemaldatavad mängud')
           .setMinValues(1)
           .setMaxValues(mine.length)
           .addOptions(mine.map((g) => ({ label: gameName(g.name, 100), value: String(g.appid) }))),
@@ -332,6 +333,6 @@ async function handleRemove(
   if (!chosen) return;
 
   for (const v of chosen.values) removeUserGame(ctx.db, targetId, Number(v));
-  await chosen.update({ content: `Removed ${chosen.values.length}.`, components: [] });
+  await chosen.update({ content: `Eemaldatud: ${chosen.values.length}.`, components: [] });
   await i.editReply(render() as never).catch(() => {});
 }

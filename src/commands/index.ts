@@ -96,13 +96,13 @@ export function displayNameOf(
   const member = interaction.guild?.members.cache.get(userId);
   if (member) return member.displayName;
   if (interaction.user.id === userId) return interaction.user.displayName ?? interaction.user.username;
-  return 'they';
+  return 'tema';
 }
 
 export function guildOnlyEmbed() {
   return noticeEmbed(
-    'Run this in a server',
-    'This command compares you with the other members of a server, so it only works inside one.',
+    'Käivita see serveris',
+    'See käsk võrdleb sind serveri teiste liikmetega, seega töötab ainult serveris.',
     COLORS.warn,
   );
 }
@@ -113,7 +113,7 @@ export function guildOnlyEmbed() {
 /**
  * ASSUMPTION: src/db/queries.ts exposes only the mutators and list queries named
  * in the contract, with no plain getters for "is this user linked" / "is this
- * user discoverable". Those three reads are needed by /steam refresh and
+ * user discoverable". Those three reads are needed by /steam update and
  * /privacy, so they are done here as read-only SELECTs against the documented
  * schema. Everything else goes through queries.ts.
  */
@@ -215,10 +215,10 @@ export function getGuildStats(db: Db, guildId: string): { members: number; disti
 export function agoLabel(unixSeconds: number | null): string | null {
   if (unixSeconds === null || !Number.isFinite(unixSeconds)) return null;
   const secs = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (secs < 90) return 'just now';
+  if (secs < 90) return 'just nüüd';
   const mins = Math.round(secs / 60);
-  if (mins < 90) return `${mins} min ago`;
+  if (mins < 90) return `${mins} min tagasi`;
   const hours = Math.round(mins / 60);
-  if (hours < 36) return `${hours} h ago`;
-  return `${Math.round(hours / 24)} d ago`;
+  if (hours < 36) return `${hours} h tagasi`;
+  return `${Math.round(hours / 24)} p tagasi`;
 }

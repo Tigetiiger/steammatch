@@ -9,6 +9,7 @@
 import type { Database } from 'better-sqlite3';
 import type { LibraryResult, OwnedGame, ProfileState } from '../types.js';
 import { foldName, sanitizeName } from '../text.js';
+import { getExcludedAppids } from '../db/queries.js';
 
 // Re-exported for callers that already import these from here.
 export { foldName, sanitizeName };
@@ -28,6 +29,8 @@ export interface SyncOutcome {
   written: number;
   /** Rows removed because the app is no longer in the library (refund, revoked share). */
   removed: number;
+  /** Games skipped because the user unchecked them at the import checklist. */
+  excluded: number;
   staleAfter: number;
   failCount: number;
   error: string | null;
@@ -129,9 +132,15 @@ export async function syncLibrary(
   const games = hasAuthoritativeGames(result.state) ? result.games : null;
   const staleAfter = now + ttlFor(result.state);
 
+  // Read INSIDE the transaction so a checklist submitted mid-sync cannot be
+  // half-applied. syncLibrary loads this itself rather than taking it as an
+  // argument: a caller that forgot to pass it would silently re-import every
+  // game the user had removed.
   const run = db.transaction(() => {
+    const excludedAppids = getExcludedAppids(db, userId);
     let written = 0;
     let removed = 0;
+    let excluded = 0;
 
     if (games !== null) {
       // A malformed Steam response once classified as an authoritative empty
@@ -142,7 +151,7 @@ export async function syncLibrary(
       if (games.length === 0 && !wasEmpty && countUserGames(db, userId) > 0) {
         removed = 0;
       } else {
-        ({ written, removed } = writeGames(db, userId, games, now));
+        ({ written, removed, excluded } = writeGames(db, userId, games, now, excludedAppids));
       }
     }
 
@@ -163,11 +172,11 @@ export async function syncLibrary(
       id64,
     );
 
-    return { written, removed };
+    return { written, removed, excluded };
   });
 
-  const { written, removed } = run();
-  return { state: result.state, written, removed, staleAfter, failCount: 0, error: null };
+  const { written, removed, excluded } = run();
+  return { state: result.state, written, removed, excluded, staleAfter, failCount: 0, error: null };
 }
 
 function writeGames(
@@ -175,7 +184,9 @@ function writeGames(
   userId: string,
   games: readonly OwnedGame[],
   now: number,
-): { written: number; removed: number } {
+  /** Appids the user unchecked at the import checklist. Never written, never staged. */
+  excludedAppids: ReadonlySet<number>,
+): { written: number; removed: number; excluded: number } {
   const upsertGame = db.prepare(
     `INSERT INTO games (appid, name, name_folded, icon_hash, last_seen_at)
      VALUES (?, ?, ?, ?, ?)
@@ -202,8 +213,15 @@ function writeGames(
   const stage = db.prepare('INSERT OR IGNORE INTO _sync_appids (appid) VALUES (?)');
 
   const seen = new Set<number>();
+  let excluded = 0;
   for (const game of games) {
     if (!Number.isInteger(game.appid) || seen.has(game.appid)) continue;
+    // Deliberately NOT staged either. Staying out of _sync_appids is what makes
+    // the delete below remove a game the user excluded after it was imported.
+    if (excludedAppids.has(game.appid)) {
+      excluded++;
+      continue;
+    }
     seen.add(game.appid);
     const name = sanitizeName(game.name) || `App ${game.appid}`;
     upsertGame.run(game.appid, name, foldName(name), game.iconHash, now);
@@ -233,7 +251,7 @@ function writeGames(
 
   db.exec('DELETE FROM _sync_appids');
 
-  return { written: seen.size, removed: del.changes };
+  return { written: seen.size, removed: del.changes, excluded };
 }
 
 /** Failures never touch user_games: the last good snapshot stays queryable. */
@@ -256,5 +274,5 @@ function recordFailure(db: Database, id64: string, message: string, now: number)
       WHERE steam_id64 = ?`,
   ).run(staleAfter, message.slice(0, 500), failCount, id64);
 
-  return { state: 'error', written: 0, removed: 0, staleAfter, failCount, error: message };
+  return { state: 'error', written: 0, removed: 0, excluded: 0, staleAfter, failCount, error: message };
 }

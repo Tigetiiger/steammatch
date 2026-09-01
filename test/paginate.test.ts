@@ -39,14 +39,14 @@ beforeEach(() => {
 });
 
 describe('FILTERS', () => {
-  it('is exactly the 30m/1h/5h/10h/All row, in that order', () => {
-    expect(FILTERS.map((f) => f.label)).toEqual(['30m+', '1h+', '5h+', '10h+', 'All']);
+  it('is exactly the 30m/1h/5h/10h/all row, in that order', () => {
+    expect(FILTERS.map((f) => f.label)).toEqual(['30 min+', '1 h+', '5 h+', '10 h+', 'Kõik']);
     expect(FILTERS.map((f) => f.min)).toEqual([30, 60, 300, 600, -1]);
   });
 
   it('uses -1 for All, never 0, because filters apply a strict >', () => {
     const all = FILTERS.at(-1)!;
-    expect(all.label).toBe('All');
+    expect(all.label).toBe('Kõik');
     expect(all.min).toBe(-1);
     // The exact predicate the callers use: a 0-minute game must survive "All".
     expect(0 > all.min).toBe(true);
@@ -214,13 +214,13 @@ describe('filterRow', () => {
     const b = buttons(filterRow('abc12345', 300));
     const primaries = b.filter((x) => x.style === ButtonStyle.Primary);
 
-    expect(primaries.map((x) => x.label)).toEqual(['5h+']);
+    expect(primaries.map((x) => x.label)).toEqual(['5 h+']);
     expect(b.filter((x) => x.style === ButtonStyle.Secondary)).toHaveLength(4);
   });
 
-  it('highlights All when the active filter is -1', () => {
+  it('highlights Kõik when the active filter is -1', () => {
     const b = buttons(filterRow('abc12345', -1));
-    expect(b.filter((x) => x.style === ButtonStyle.Primary).map((x) => x.label)).toEqual(['All']);
+    expect(b.filter((x) => x.style === ButtonStyle.Primary).map((x) => x.label)).toEqual(['Kõik']);
   });
 
   it('highlights nothing for a filter value that is not in the row', () => {

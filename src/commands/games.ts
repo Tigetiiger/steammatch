@@ -65,7 +65,7 @@ const WHO_MAX_OWNERS = 25;
 export function minPlaytimeOption(o: SlashCommandIntegerOption): SlashCommandIntegerOption {
   return o
     .setName('min_playtime')
-    .setDescription('Minutes played, exclusive. Default 30.')
+    .setDescription('Vähim mänguaeg minutites. Vaikimisi 30.')
     .setRequired(false)
     .setMinValue(0)
     .setMaxValue(100_000);
@@ -73,47 +73,47 @@ export function minPlaytimeOption(o: SlashCommandIntegerOption): SlashCommandInt
 
 const data = new SlashCommandBuilder()
   .setName('games')
-  .setDescription('Browse libraries in this server')
+  .setDescription('Sirvi selle serveri mängukogusid')
   .addSubcommand((s) =>
     s
       .setName('add')
-      .setDescription('Add games to your list — Steam, or anything else you play')
+      .setDescription('Lisa mänge oma nimekirja — Steamist või mujalt')
       .addUserOption((o) =>
         o
           .setName('user')
-          .setDescription('Add games FOR someone else (needs Manage Server)')
+          .setDescription('Lisa mänge KELLEGI TEISE eest (vajab Manage Server õigust)')
           .setRequired(false),
       ),
   )
   .addSubcommand((s) =>
     s
       .setName('list')
-      .setDescription('Your library, sorted by playtime')
+      .setDescription('Sinu mängud, mänguaja järjekorras')
       .addIntegerOption(minPlaytimeOption)
       .addBooleanOption((o) =>
         o
           .setName('public')
-          .setDescription('Post it in the channel instead of only showing it to you')
+          .setDescription('Postita kanalisse, mitte ainult sulle')
           .setRequired(false),
       ),
   )
   .addSubcommand((s) =>
     s
       .setName('shared')
-      .setDescription('Games you and one other member both play')
+      .setDescription('Mängud, mida te mõlemad mängite')
       .addUserOption((o) =>
-        o.setName('user').setDescription('Who to compare against').setRequired(true),
+        o.setName('user').setDescription('Kellega võrrelda').setRequired(true),
       )
       .addIntegerOption(minPlaytimeOption),
   )
   .addSubcommand((s) =>
     s
       .setName('who')
-      .setDescription('Who in this server plays a game')
+      .setDescription('Kes selles serveris mängu mängib')
       .addStringOption((o) =>
         o
           .setName('game')
-          .setDescription('Start typing a game name')
+          .setDescription('Hakka mängu nime kirjutama')
           .setRequired(true)
           .setAutocomplete(true)
           .setMaxLength(LIMITS.choiceValue),
@@ -123,11 +123,11 @@ const data = new SlashCommandBuilder()
   .addSubcommand((s) =>
     s
       .setName('leaderboard')
-      .setDescription('What this server plays most')
+      .setDescription('Mida selles serveris kõige rohkem mängitakse')
       .addBooleanOption((o) =>
         o
           .setName('mine')
-          .setDescription('Only games you have, ranked by how many people here share them'),
+          .setDescription('Ainult sinu mängud, järjestatud jagajate arvu järgi'),
       )
       .addIntegerOption(minPlaytimeOption),
   );
@@ -162,7 +162,7 @@ const command: Command = {
           // Prototype screen 6 shows "<name> (N owners)" -- the count is the
           // whole reason the list is ranked, so it belongs in the label.
           name: truncate(
-            `${g.name} (${g.owners} ${g.owners === 1 ? 'owner' : 'owners'})`,
+            `${g.name} (${g.owners} ${g.owners === 1 ? 'mängija' : 'mängijat'})`,
             LIMITS.choiceName,
           ),
           value: truncate(String(g.appid), LIMITS.choiceValue),
@@ -209,7 +209,7 @@ const command: Command = {
     if (sub === 'leaderboard') return leaderboardSub(interaction, ctx, min);
 
     await interaction.editReply({
-      embeds: [noticeEmbed('Unknown subcommand', `I do not know \`/games ${sub}\`.`, COLORS.err)],
+      embeds: [noticeEmbed('Tundmatu alamkäsk', `Ma ei tunne käsku \`/games ${sub}\`.`, COLORS.err)],
     });
   },
 };
@@ -238,8 +238,8 @@ async function addSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
       await interaction.editReply({
         embeds: [
           noticeEmbed(
-            'You cannot add games for other people',
-            'Adding games **for someone else** needs the **Manage Server** permission.\n\nRun **/games add** with no `user` to manage your own.',
+            'Sa ei saa teiste eest mänge lisada',
+            'Teise inimese eest mängude lisamiseks on vaja **Manage Server** õigust.\n\nOma mängude haldamiseks käivita **/games add** ilma `user` valikuta.',
             COLORS.err,
           ),
         ],
@@ -248,7 +248,7 @@ async function addSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
     }
     if (target.bot) {
       await interaction.editReply({
-        embeds: [noticeEmbed('Bots do not play games', 'Pick a person instead.', COLORS.warn)],
+        embeds: [noticeEmbed('Botid ei mängi', 'Vali päris inimene.', COLORS.warn)],
       });
       return;
     }
@@ -326,8 +326,8 @@ async function sharedSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<vo
     await interaction.editReply({
       embeds: [
         noticeEmbed(
-          'You already own everything you own',
-          'Pick somebody else to compare with — or run **/match** to see who is closest to you.',
+          'Sa jagad iseendaga kõike',
+          'Vali keegi teine — või käivita **/match**, et näha, kes on sulle kõige lähedasem.',
           COLORS.warn,
         ),
       ],
@@ -336,7 +336,7 @@ async function sharedSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<vo
   }
   if (them.bot) {
     await interaction.editReply({
-      embeds: [noticeEmbed('Bots do not play games', 'Pick a person instead.', COLORS.warn)],
+      embeds: [noticeEmbed('Botid ei mängi', 'Vali päris inimene.', COLORS.warn)],
     });
     return;
   }
@@ -350,8 +350,8 @@ async function sharedSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<vo
     await interaction.editReply({
       embeds: [
         noticeEmbed(
-          `${gameName(meName, 40)} & ${gameName(themName, 40)} — nothing in common`,
-          `Neither of you has a game the other has also played for more than ${fmtMinutes(min)}. Lower **min_playtime**, or one of you has not linked a library yet.`,
+          `${gameName(meName, 40)} & ${gameName(themName, 40)} — ühiseid mänge pole`,
+          `Teil pole ühtki mängu, mida mõlemad oleksid mänginud üle ${fmtMinutes(min)}. Proovi väiksemat **min_playtime** väärtust.`,
           COLORS.warn,
         ),
       ],
@@ -386,20 +386,20 @@ async function sharedSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<vo
         new ButtonBuilder()
           .setCustomId(`px:${v.id}:random`)
           .setStyle(ButtonStyle.Primary)
-          .setLabel('Pick one at random'),
+          .setLabel('Vali juhuslik'),
       ],
       handle: async (i, v, key) => {
         if (key !== 'random') return 'rerender';
         const pick = v.rows[Math.floor(Math.random() * v.rows.length)];
         if (!pick) {
           await i.reply({
-            content: 'Nothing to pick from.',
+            content: 'Pole millestki valida.',
             flags: MessageFlags.Ephemeral,
           });
           return 'handled';
         }
         await i.reply({
-          content: `Tonight: **${gameName(pick.name)}** — ${safeName(meName)} and ${safeName(themName)} both play it.`,
+          content: `Täna: **${gameName(pick.name)}** — ${safeName(meName)} ja ${safeName(themName)} mõlemad mängivad seda.`,
           allowedMentions: { parse: [] },
         });
         return 'handled';
@@ -422,8 +422,13 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
 
   // Autocomplete sends the appid as the value, but nothing forces the user to
   // pick a suggestion -- fall back to a name search on arbitrary typed text.
+  //
+  // The leading `-?` is load-bearing: manually added games carry a synthetic
+  // NEGATIVE appid, so without it picking "Minecraft" from the suggestions sent
+  // "-1", failed this test, fell through to a name search for the literal text
+  // "-1", and reported that nobody owns the game the user had just been offered.
   let appid: number | null = null;
-  if (/^\d{1,10}$/.test(raw)) appid = Number.parseInt(raw, 10);
+  if (/^-?\d{1,10}$/.test(raw)) appid = Number.parseInt(raw, 10);
   if (appid === null || getGameMeta(ctx.db, appid) === null) {
     const hits = raw.length > 0 ? searchGamesForAutocomplete(ctx.db, guildId, raw, 1) : [];
     const first = hits[0];
@@ -435,10 +440,10 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
     await interaction.editReply({
       embeds: [
         noticeEmbed(
-          'I do not know that game',
+          'Ma ei tunne seda mängu',
           raw.length === 0
-            ? 'Type part of a game name and pick one of the suggestions.'
-            : `Nobody here owns anything matching **${gameName(raw, 60)}**. I only know games somebody in this server has linked.`,
+            ? 'Kirjuta osa mängu nimest ja vali pakutust.'
+            : `Kellelgi siin pole midagi, mis sobiks otsinguga **${gameName(raw, 60)}**. Tunnen ainult mänge, mille keegi siin on lisanud.`,
           COLORS.warn,
         ),
       ],
@@ -453,7 +458,9 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
   const owners = fetched.slice(0, WHO_MAX_OWNERS);
   const totalOwners = fetched.length;
 
-  const store = storeUrl(appid);
+  // Only Steam apps have a store page. A manual game's synthetic negative appid
+  // would build https://store.steampowered.com/app/-1, which is a 404.
+  const store = appid > 0 ? storeUrl(appid) : null;
   // Registered so the global button router does not also answer these clicks.
   const sessionId = claimSessionId(interaction.user.id);
   const embed = whoEmbed({
@@ -466,9 +473,12 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
     storeUrl: store,
   });
 
+  // With no owners AND no store page there is nothing to put in the row, and
+  // Discord rejects an action row with zero components.
+  const row = whoRow(sessionId, owners.length, store);
   const message = await interaction.editReply({
     embeds: [embed],
-    components: [whoRow(sessionId, owners.length, store)],
+    components: row.components.length > 0 ? [row] : [],
   });
 
   if (owners.length === 0) {
@@ -486,7 +496,7 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
       if (i.user.id !== interaction.user.id) {
         await i
           .reply({
-            content: "These buttons aren't for you — run the command yourself to get your own copy.",
+            content: 'Need nupud pole sinu omad — käivita käsk ise.',
             flags: MessageFlags.Ephemeral,
           })
           .catch(() => {});
@@ -541,8 +551,8 @@ async function leaderboardSub(interaction: Inter, ctx: Ctx, min: Minutes): Promi
     await interaction.editReply({
       embeds: [
         noticeEmbed(
-          `${gameName(guildLabel, 80)} — nothing to rank yet`,
-          `No game here has two members with more than ${fmtMinutes(min)} played. Once a couple more people run **/games add** this fills up.`,
+          `${gameName(guildLabel, 80)} — pole veel midagi järjestada`,
+          `Ühelgi mängul pole kahte liiget, kes oleksid seda mänginud üle ${fmtMinutes(min)}. Kui veel paar inimest käivitavad **/games add**, siis täitub.`,
           COLORS.warn,
         ),
       ],

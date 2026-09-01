@@ -181,7 +181,7 @@ describe('parseSteamInput', () => {
     expect(() => parseSteamInput('https://steamcommunity.com/user/abcd-efgh')).toThrow(
       SteamUserError,
     );
-    expect(() => parseSteamInput('steamcommunity.com/user/abcd-efgh')).toThrow(/invite/i);
+    expect(() => parseSteamInput('steamcommunity.com/user/abcd-efgh')).toThrow(/sõbrakutse/i);
     expect(() => parseSteamInput('https://s.team/p/abcd-efgh')).toThrow(SteamUserError);
   });
 

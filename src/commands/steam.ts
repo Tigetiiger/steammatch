@@ -1,17 +1,27 @@
 /**
- * /steam unlink | refresh  (linking lives in /games add)   (prototype screens 1, 2, 3)
+ * /steam update | change | unlink   (linking lives in /games add)
+ *
+ * Steam is contacted ONLY when a person asks for it: once when a library is
+ * first imported, and then whenever someone runs /steam update. There is no
+ * background crawl -- see "No background refresh" in the README.
+ *
+ * Every path that writes a library goes through `reviewAndSync`, so the
+ * checklist can never be skipped by adding a new caller.
  */
 
-import { ComponentType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { ComponentType, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import type { ChatInputCommandInteraction, RepliableInteraction } from 'discord.js';
-import type { LibraryResult, Minutes } from '../types.js';
+import type { LibraryResult, Minutes, OwnedGame } from '../types.js';
 import { SteamUserError } from '../types.js';
 import { resolveToId64 } from '../steam/resolve.js';
 import { syncLibrary, type LibrarySource } from '../steam/sync.js';
 import {
   ensureUser,
-  hasStoredConsent,
+  getExcludedAppids,
   linkSteam,
+  listAllUserGames,
+  setExcludedGames,
+  setHiddenGames,
   setOptedIn,
   touchGuildMember,
   unlink,
@@ -20,55 +30,53 @@ import {
   COLORS,
   consentEmbed,
   consentRow,
+  fmtMinutes,
   linkSuccessEmbed,
   noticeEmbed,
   profileStateEmbed,
   profileStateMessage,
   retryRow,
 } from '../ui/embeds.js';
+import { runChecklist } from '../ui/checklist.js';
 import { claimSessionId, releaseSession } from '../ui/paginate.js';
 import {
+  ROW_LIMITS,
   getLinkInfo,
   guildOnlyEmbed,
-  refuseIfSteamToken,
   resolveMinPlaytime,
   type BotContext,
   type Command,
 } from './index.js';
 import {
-  REFRESH_COOLDOWN_MS,
   clearConsent,
-  softenRefreshMark,
-  hasConsented,
   markRefreshed,
-  recordConsent,
   refreshCooldownLeft,
+  softenRefreshMark,
 } from './user-state.js';
-
-/** How often the background refresh is advertised to run, in hours. */
-const REFRESH_HOURS = 6;
-
-
-
 
 const data = new SlashCommandBuilder()
   .setName('steam')
-  .setDescription('Refresh or remove your Steam library — add games with /games add')
+  .setDescription('Halda oma Steami kogu — mänge lisad käsuga /games add')
   .addSubcommand((s) =>
-    s.setName('unlink').setDescription('Delete your Steam link, games and playtime'),
+    s.setName('update').setDescription('Otsi Steamist uusi mänge ja vali, mida alles jätta'),
   )
   .addSubcommand((s) =>
-    s.setName('refresh').setDescription('Re-import your library from Steam now'),
+    s.setName('change').setDescription('Vali, milliseid su mänge teised siin näevad'),
+  )
+  .addSubcommand((s) =>
+    s.setName('unlink').setDescription('Kustuta Steami ühendus, mängud ja mänguaeg'),
   );
 
 /* -------------------------------------------------------------------------- */
+/* Shared pieces                                                               */
+/* -------------------------------------------------------------------------- */
 
 /**
- * Consent prompt (screen 3). The reply is ephemeral, so only the invoker can see
- * or click these buttons -- a `filter` is safe here in a way it would not be on
- * a public paginated message.
+ * Consent prompt. The reply is ephemeral, so only the invoker can see or click
+ * these buttons -- a `filter` is safe here in a way it would not be on a public
+ * paginated message.
  */
-async function askConsent(interaction: ChatInputCommandInteraction): Promise<boolean> {
+export async function askConsent(interaction: RepliableInteraction): Promise<boolean> {
   // Registered in the paginate session store so the global button router leaves
   // these clicks alone while this prompt is live.
   const id = claimSessionId(interaction.user.id);
@@ -99,7 +107,7 @@ function cachedSource(lib: LibraryResult): LibrarySource {
   return { fetchLibrary: async () => lib };
 }
 
-function libraryStats(games: LibraryResult['games'], min: Minutes) {
+function libraryStats(games: readonly OwnedGame[], min: Minutes) {
   let totalMinutes = 0;
   let matchable = 0;
   let recent = 0;
@@ -111,13 +119,123 @@ function libraryStats(games: LibraryResult['games'], min: Minutes) {
   return { totalMinutes, matchable, recent, ownedTotal: games.length };
 }
 
+/** Most-played first, so the games worth thinking about are on page one. */
+function byPlaytimeDesc(a: OwnedGame, b: OwnedGame): number {
+  return b.playtimeForever - a.playtimeForever || a.name.localeCompare(b.name);
+}
+
+const NOT_IMPORTED = noticeEmbed(
+  'Midagi ei imporditud',
+  'Sulgesid nimekirja, nii et midagi ei salvestatud ega muudetud.\n\nUuesti: **/steam update**',
+  COLORS.warn,
+);
+
 /**
- * Runs the import once consent is in hand. `state === 'public'` and
- * `playtime_hidden` / `empty` are all readable libraries and get persisted;
- * `private`, `game_details_private` and `error` store nothing.
+ * The one place a Steam library is ever written to the database.
+ *
+ * Shows the checklist over `lib.games`, persists the unchecked ones as
+ * exclusions, then syncs. Returns null when the user backed out, in which case
+ * NOTHING has been written -- the caller must not treat that as a success.
  */
+async function reviewAndSync(
+  interaction: RepliableInteraction,
+  ctx: BotContext,
+  userId: string,
+  id64: string,
+  lib: LibraryResult,
+  min: Minutes,
+  /** Exclusions to pre-tick. Empty for a library that is not this account's. */
+  alreadyExcluded: ReadonlySet<number>,
+  /**
+   * Run after the user saves and before anything is written. This is where the
+   * first import claims the Steam identity: taking the claim any earlier would
+   * mean a cancelled checklist had already linked the account -- and, on a
+   * relink, already wiped the previous library. Return false to abort having
+   * written nothing.
+   */
+  accept: () => boolean = () => true,
+): Promise<{ kept: OwnedGame[]; excludedCount: number } | null> {
+  const games = [...lib.games].sort(byPlaytimeDesc);
+
+  const review = await runChecklist({
+    interaction,
+    ownerId: interaction.user.id,
+    items: games.map((g) => ({
+      id: String(g.appid),
+      label: g.name,
+      // 'playtime_hidden' zeroes every playtime, so a 0 here is genuinely
+      // unknown. Say nothing rather than print a misleading "0m played".
+      ...(g.playtimeForever > 0 ? { note: `mängitud ${fmtMinutes(g.playtimeForever)}` } : {}),
+    })),
+    initial: games.filter((g) => !alreadyExcluded.has(g.appid)).map((g) => String(g.appid)),
+    title: 'Vali, mida importida',
+    intro:
+      'Eemalda linnuke mängudelt, mida sa ei taha salvestada. Neid ei salvestata ja need jäävad valimata ka järgmisel **/steam update** korral.',
+    checkedMeans: 'salvestatakse',
+    uncheckedMeans: 'ei salvestata',
+    saveLabel: 'Impordi valitud',
+  });
+
+  if (!review.saved) return null;
+  if (!accept()) return null;
+
+  const keptIds = review.checked;
+  const kept = games.filter((g) => keptIds.has(String(g.appid)));
+  const dropped = games.filter((g) => !keptIds.has(String(g.appid)));
+
+  // Exclusions first: syncLibrary reads that table itself, so writing them
+  // before the sync is what makes even the very first import honour the list.
+  setExcludedGames(
+    ctx.db,
+    userId,
+    dropped.map((g) => ({ appid: g.appid, name: g.name })),
+  );
+  try {
+    await syncLibrary(ctx.db, userId, id64, cachedSource(lib));
+  } catch (err) {
+    console.error('[steam] syncLibrary failed', err);
+  }
+  return { kept, excludedCount: dropped.length };
+}
+
+/** The green "here is what I imported" screen, shared by link and update. */
+async function reportImported(
+  interaction: RepliableInteraction,
+  result: { kept: OwnedGame[]; excludedCount: number },
+  min: Minutes,
+  personaName: string,
+  avatarUrl: string | null,
+  guildName: string,
+  forUserId: string | null,
+): Promise<void> {
+  // Stats are computed over the KEPT games only: reporting numbers that include
+  // games the user just refused would be reporting data we do not hold.
+  const stats = libraryStats(result.kept, min);
+  await interaction.editReply({
+    embeds: [
+      linkSuccessEmbed({
+        personaName,
+        avatarUrl,
+        ownedTotal: stats.ownedTotal,
+        matchable: stats.matchable,
+        minPlaytime: min,
+        totalMinutes: stats.totalMinutes,
+        recentCount: stats.recent,
+        excludedCount: result.excludedCount,
+        guildName,
+        forUserId,
+      }),
+    ],
+    components: [],
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* First import (driven from the /games add panel)                             */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Resolve, fetch and store a Steam library, then report the outcome.
+ * Resolve, fetch, review and store a Steam library, then report the outcome.
  *
  * Typed on RepliableInteraction rather than ChatInputCommandInteraction so the
  * same flow can be driven from the /games panel's modal, not just a slash
@@ -142,9 +260,9 @@ export async function importLibrary(
     const msg =
       err instanceof SteamUserError
         ? err.message
-        : "I couldn't turn that into a Steam account. Paste your full profile URL — it looks like `https://steamcommunity.com/id/yourname` or `https://steamcommunity.com/profiles/7656119…`.";
+        : 'Ei suutnud sellest Steami kontot leida. Kleebi oma profiili täisaadress, näiteks `https://steamcommunity.com/id/sinunimi` või `https://steamcommunity.com/profiles/7656119…`.';
     await interaction.editReply({
-      embeds: [noticeEmbed("That isn't a Steam profile I can read", msg, COLORS.err)],
+      embeds: [noticeEmbed('See pole loetav Steami profiil', msg, COLORS.err)],
       components: [retryRow(userId, false)],
     });
     return;
@@ -168,57 +286,91 @@ export async function importLibrary(
     return;
   }
 
-  // linkSteam must run first: syncLibrary updates the steam_accounts row.
-  const link = linkSteam(ctx.db, userId, id64, addedBy);
-  if (!link.ok) {
-    // Steam IDs are public, so this is someone typing an ID that is not theirs
-    // (or a genuine duplicate). Either way we do not move the claim.
-    await interaction.editReply({
-      embeds: [
-        noticeEmbed(
-          'That Steam account is already linked',
-          'Somebody on Discord has already linked this Steam account, so I will not move it.\n\nIf it is yours, ask them to run **/steam unlink**, or link a different account.',
-          COLORS.warn,
-        ),
-      ],
-      components: [],
-    });
+  // The checklist runs BEFORE linkSteam so that backing out of it leaves the
+  // database exactly as it was. Doing it after would mean a cancel had already
+  // created the link -- and, on a relink, already wiped the old library.
+  const existing = getLinkInfo(ctx.db, userId);
+  // Exclusions are appids, which only mean anything relative to the account
+  // they came from. Re-pointing at a different Steam account starts clean.
+  const alreadyExcluded =
+    existing?.id64 === id64 ? getExcludedAppids(ctx.db, userId) : new Set<number>();
+
+  if (lib.games.length > 0) {
+    let claimFailed = false;
+    const result = await reviewAndSync(
+      interaction,
+      ctx,
+      userId,
+      id64,
+      lib,
+      min,
+      alreadyExcluded,
+      () => {
+        if (claimLink(ctx, userId, id64, addedBy)) return true;
+        claimFailed = true;
+        return false;
+      },
+    );
+    if (claimFailed) {
+      await interaction.editReply({ embeds: [alreadyClaimedEmbed()], components: [] });
+      return;
+    }
+    if (result === null) {
+      await interaction.editReply({ embeds: [NOT_IMPORTED], components: [] });
+      return;
+    }
+    await reportImported(
+      interaction,
+      result,
+      min,
+      lib.personaName ?? 'your Steam account',
+      lib.avatarUrl,
+      interaction.guild?.name ?? 'this server',
+      addedBy === null ? null : userId,
+    );
     return;
   }
-  setOptedIn(ctx.db, userId, true);
+
+  // No games to review (an empty library, or one whose playtimes are hidden and
+  // therefore not authoritative). Link it so /steam update has something to
+  // work from, then explain the state.
+  if (!claimLink(ctx, userId, id64, addedBy)) {
+    await interaction.editReply({ embeds: [alreadyClaimedEmbed()], components: [] });
+    return;
+  }
   try {
     await syncLibrary(ctx.db, userId, id64, cachedSource(lib));
   } catch (err) {
     console.error('[steam] syncLibrary failed', err);
   }
-
-  if (lib.state !== 'public') {
-    const m = profileStateMessage(lib.state, lib.personaName, min);
-    await interaction.editReply({
-      embeds: [profileStateEmbed(lib.state, lib.personaName, min)],
-      components: m.privacyHelp ? [retryRow(userId, true)] : [],
-    });
-    return;
-  }
-
-  const stats = libraryStats(lib.games, min);
+  const m = profileStateMessage(lib.state, lib.personaName, min);
   await interaction.editReply({
-    embeds: [
-      linkSuccessEmbed({
-        personaName: lib.personaName ?? 'your Steam account',
-        avatarUrl: lib.avatarUrl,
-        ownedTotal: stats.ownedTotal,
-        matchable: stats.matchable,
-        minPlaytime: min,
-        totalMinutes: stats.totalMinutes,
-        recentCount: stats.recent,
-        refreshHours: REFRESH_HOURS,
-        guildName: interaction.guild?.name ?? 'this server',
-        forUserId: addedBy === null ? null : userId,
-      }),
-    ],
-    components: [],
+    embeds: [profileStateEmbed(lib.state, lib.personaName, min)],
+    components: m.privacyHelp ? [retryRow(userId, true)] : [],
   });
+}
+
+/** linkSteam + opt-in, as one step. False when someone else already owns the ID. */
+function claimLink(
+  ctx: BotContext,
+  userId: string,
+  id64: string,
+  addedBy: string | null,
+): boolean {
+  const link = linkSteam(ctx.db, userId, id64, addedBy);
+  if (!link.ok) return false;
+  setOptedIn(ctx.db, userId, true);
+  return true;
+}
+
+function alreadyClaimedEmbed() {
+  // Steam IDs are public, so this is someone typing an ID that is not theirs
+  // (or a genuine duplicate). Either way we do not move the claim.
+  return noticeEmbed(
+    'See Steami konto on juba ühendatud',
+    'Keegi teine on selle Steami konto juba ühendanud, nii et ma ei võta seda üle.\n\nKui see on sinu oma, palu tal käivitada **/steam unlink**.',
+    COLORS.warn,
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -242,112 +394,224 @@ const command: Command = {
     touchGuildMember(ctx.db, interaction.guildId, userId);
     const min = resolveMinPlaytime(ctx.db, interaction.guildId, null);
 
-    if (sub === 'unlink')    if (sub === 'unlink') {
-      unlink(ctx.db, userId);
-      setOptedIn(ctx.db, userId, false);
-      clearConsent(userId);
-      await interaction.editReply({
-        embeds: [
-          noticeEmbed(
-            'Unlinked — everything is gone',
-            'Your Steam ID, your game list and your playtime have been deleted. You no longer appear in anyone\'s /match, /games who or /games leaderboard.\n\nRun **/games add** any time to start over.',
-            COLORS.ok,
-          ),
-        ],
-        components: [],
-      });
-      return;
-    }
-
-    if (sub === 'refresh') {
-      const link = getLinkInfo(ctx.db, userId);
-      if (!link) {
-        await interaction.editReply({
-          embeds: [
-            noticeEmbed(
-              'Nothing to refresh',
-              'You have no Steam account linked. Run **/games add** first.',
-              COLORS.warn,
-            ),
-          ],
-        });
-        return;
-      }
-
-      const waitMs = refreshCooldownLeft(userId);
-      if (waitMs > 0) {
-        const readyAt = Math.floor((Date.now() + waitMs) / 1000);
-        await interaction.editReply({
-          embeds: [
-            noticeEmbed(
-              'Already refreshed recently',
-              `Steam rate-limits me, so manual refreshes are once every 15 minutes. Try again <t:${readyAt}:R>.\n\nYour library also refreshes on its own about every ${REFRESH_HOURS} hours.`,
-              COLORS.warn,
-            ),
-          ],
-        });
-        return;
-      }
-      markRefreshed(userId);
-
-      let lib: LibraryResult;
-      try {
-        lib = await ctx.steam.fetchLibrary(link.id64);
-      } catch (err) {
-        console.error('[steam] refresh fetch failed', err);
-        lib = { state: 'error', personaName: link.personaName, avatarUrl: null, games: [] };
-      }
-
-      // Persist first where Steam gave us a real answer: 'playtime_hidden' and
-      // 'empty' are authoritative libraries, they just have nothing matchable.
-      if (lib.state !== 'error' && lib.state !== 'private' && lib.state !== 'game_details_private') {
-        try {
-          await syncLibrary(ctx.db, userId, link.id64, cachedSource(lib));
-        } catch (err) {
-          console.error('[steam] refresh sync failed', err);
-        }
-      }
-
-      if (lib.state !== 'public') {
-        // Every non-public state needs its own explanation. Reporting
-        // "imported 412 games, 0 matchable" as a green success is how a user
-        // who has NOT fixed their privacy setting concludes the bot is broken.
-        // A failure is not the user's fault, so shorten the wait -- but do not
-        // clear it: an always-failing profile would otherwise be an unlimited
-        // free loop against the shared Steam rate limiter.
-        softenRefreshMark(userId);
-        const m = profileStateMessage(lib.state, lib.personaName ?? link.personaName, min);
-        await interaction.editReply({
-          embeds: [profileStateEmbed(lib.state, lib.personaName ?? link.personaName, min)],
-          components: [retryRow(userId, m.privacyHelp)],
-        });
-        return;
-      }
-
-      const stats = libraryStats(lib.games, min);
-      await interaction.editReply({
-        embeds: [
-          linkSuccessEmbed({
-            personaName: lib.personaName ?? link.personaName ?? 'your Steam account',
-            avatarUrl: lib.avatarUrl,
-            ownedTotal: stats.ownedTotal,
-            matchable: stats.matchable,
-            minPlaytime: min,
-            totalMinutes: stats.totalMinutes,
-            recentCount: stats.recent,
-            refreshHours: REFRESH_HOURS,
-            guildName: interaction.guild?.name ?? 'this server',
-          }),
-        ],
-        components: [],
-      });
-      return;
-    }
+    if (sub === 'unlink') return unlinkSub(interaction, ctx, userId);
+    if (sub === 'change') return changeSub(interaction, ctx, userId);
+    if (sub === 'update') return updateSub(interaction, ctx, userId, min);
 
     await interaction.editReply({
-      embeds: [noticeEmbed('Unknown subcommand', `I do not know \`/steam ${sub}\`.`, COLORS.err)],
+      embeds: [noticeEmbed('Tundmatu alamkäsk', `Ma ei tunne käsku \`/steam ${sub}\`.`, COLORS.err)],
     });
   },
 };
 
 export default command;
+
+/* -------------------------------------------------------------------------- */
+/* /steam unlink                                                               */
+/* -------------------------------------------------------------------------- */
+
+async function unlinkSub(
+  interaction: ChatInputCommandInteraction,
+  ctx: BotContext,
+  userId: string,
+): Promise<void> {
+  unlink(ctx.db, userId);
+  setOptedIn(ctx.db, userId, false);
+  clearConsent(userId);
+  await interaction.editReply({
+    embeds: [
+      noticeEmbed(
+        'Ühendus kustutatud',
+        'Su Steam ID, mängud ja mänguaeg on kustutatud. Sa ei ilmu enam kellegi tulemustes.\n\nUuesti alustamiseks: **/games add**',
+        COLORS.ok,
+      ),
+    ],
+    components: [],
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* /steam update — the ONLY thing that contacts Steam after the first import   */
+/* -------------------------------------------------------------------------- */
+
+async function updateSub(
+  interaction: ChatInputCommandInteraction,
+  ctx: BotContext,
+  userId: string,
+  min: Minutes,
+): Promise<void> {
+  const link = getLinkInfo(ctx.db, userId);
+  if (!link) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Pole midagi uuendada',
+          'Steami kontot pole ühendatud. Käivita esmalt **/games add**.',
+          COLORS.warn,
+        ),
+      ],
+    });
+    return;
+  }
+
+  const waitMs = refreshCooldownLeft(userId);
+  if (waitMs > 0) {
+    const readyAt = Math.floor((Date.now() + waitMs) / 1000);
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Hiljuti juba uuendatud',
+          `Steam piirab päringuid, seega saab uuendada kord 15 minuti jooksul. Proovi uuesti <t:${readyAt}:R>.`,
+          COLORS.warn,
+        ),
+      ],
+    });
+    return;
+  }
+  markRefreshed(userId);
+
+  let lib: LibraryResult;
+  try {
+    lib = await ctx.steam.fetchLibrary(link.id64);
+  } catch (err) {
+    console.error('[steam] update fetch failed', err);
+    lib = { state: 'error', personaName: link.personaName, avatarUrl: null, games: [] };
+  }
+
+  if (lib.state !== 'public') {
+    // Every non-public state needs its own explanation. Reporting "imported 412
+    // games, 0 matchable" as a green success is how a user who has NOT fixed
+    // their privacy setting concludes the bot is broken. A failure is not the
+    // user's fault, so shorten the wait -- but do not clear it: an
+    // always-failing profile would otherwise be an unlimited free loop against
+    // the shared Steam rate limiter.
+    softenRefreshMark(userId);
+    // 'playtime_hidden' and 'empty' are still authoritative answers, so they are
+    // persisted; sync.ts decides what that means for the stored snapshot.
+    if (lib.state !== 'error' && lib.state !== 'private' && lib.state !== 'game_details_private') {
+      try {
+        await syncLibrary(ctx.db, userId, link.id64, cachedSource(lib));
+      } catch (err) {
+        console.error('[steam] update sync failed', err);
+      }
+    }
+    const m = profileStateMessage(lib.state, lib.personaName ?? link.personaName, min);
+    await interaction.editReply({
+      embeds: [profileStateEmbed(lib.state, lib.personaName ?? link.personaName, min)],
+      components: [retryRow(userId, m.privacyHelp)],
+    });
+    return;
+  }
+
+  const result = await reviewAndSync(
+    interaction,
+    ctx,
+    userId,
+    link.id64,
+    lib,
+    min,
+    getExcludedAppids(ctx.db, userId),
+  );
+  if (result === null) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Midagi ei muutunud',
+          'Sulgesid nimekirja, nii et su kogu jäi täpselt samaks.',
+          COLORS.warn,
+        ),
+      ],
+      components: [],
+    });
+    return;
+  }
+
+  await reportImported(
+    interaction,
+    result,
+    min,
+    lib.personaName ?? link.personaName ?? 'your Steam account',
+    lib.avatarUrl,
+    interaction.guild?.name ?? 'this server',
+    null,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* /steam change — per-game visibility                                         */
+/* -------------------------------------------------------------------------- */
+
+async function changeSub(
+  interaction: ChatInputCommandInteraction,
+  ctx: BotContext,
+  userId: string,
+): Promise<void> {
+  // Every game, hidden ones included and with no playtime filter: you must be
+  // able to unhide something no threshold would have shown you.
+  const all = listAllUserGames(ctx.db, userId, ROW_LIMITS.library);
+  if (all.length === 0) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Sul pole mänge, mida muuta',
+          'Impordi esmalt Steami kogu või lisa mänge käsitsi: **/games add**',
+          COLORS.warn,
+        ),
+      ],
+    });
+    return;
+  }
+
+  const review = await runChecklist({
+    interaction,
+    ownerId: userId,
+    items: all.map((g) => ({
+      id: String(g.appid),
+      label: g.name,
+      ...(g.tracked && g.playtime > 0
+        ? { note: `mängitud ${fmtMinutes(g.playtime)}` }
+        : { note: 'käsitsi lisatud' }),
+    })),
+    // Checked = visible. Stated that way round because "tick what people can
+    // see" is the question a person actually has; "tick what to hide" inverts
+    // it and reads as the opposite on every screen.
+    initial: all.filter((g) => !g.hidden).map((g) => String(g.appid)),
+    title: 'Kes mida näeb',
+    intro:
+      'Märgitud mänge näevad teised selles serveris. Märkimata mängud jäävad **sinu** /games list nimekirja, aga ei ilmu mujal.',
+    checkedMeans: 'teised näevad',
+    uncheckedMeans: 'ainult sinule',
+    saveLabel: 'Salvesta',
+  });
+
+  if (!review.saved) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Midagi ei muutunud',
+          'Sulgesid nimekirja, nii et nähtavus jäi täpselt samaks.',
+          COLORS.warn,
+        ),
+      ],
+      components: [],
+    });
+    return;
+  }
+
+  const hidden = all.filter((g) => !review.checked.has(String(g.appid))).map((g) => g.appid);
+  setHiddenGames(ctx.db, userId, hidden);
+
+  const visible = all.length - hidden.length;
+  await interaction.editReply({
+    embeds: [
+      noticeEmbed(
+        'Nähtavus salvestatud',
+        hidden.length === 0
+          ? `Kõik **${visible}** su mängu on selles serveris nähtavad.`
+          : `**${visible}** nähtav · **${hidden.length}** peidetud.\n\nPeidetud mängud on endiselt sinu **/games list** nimekirjas, tähisega 🔒.`,
+        COLORS.ok,
+      ),
+    ],
+    components: [],
+  });
+}

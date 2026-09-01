@@ -42,6 +42,14 @@ export interface GameRow {
   playtime: Minutes;
   /** False for manually added games, where no playtime exists. */
   tracked: boolean;
+  /** True when the owner has hidden this game from everyone else in the server. */
+  hidden: boolean;
+}
+
+/** A game the user unchecked at the import checklist, so it was never stored. */
+export interface ExcludedRow {
+  appid: number;
+  name: string;
 }
 export interface SharedRow {
   appid: number;

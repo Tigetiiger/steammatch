@@ -34,16 +34,16 @@ const MATCH_PAGE = 10;
 
 const data = new SlashCommandBuilder()
   .setName('match')
-  .setDescription('Find the people in this server whose library is most like yours')
+  .setDescription('Leia selle serveri liikmed, kelle kogu on sinu omaga sarnaseim')
   .addIntegerOption(minPlaytimeOption)
   .addStringOption((o) =>
     o
       .setName('sort')
-      .setDescription('overlap = shared games (default) · taste = shared ÷ combined')
+      .setDescription('ühised = kattuvad mängud (vaikimisi) · maitse = ühised ÷ kokku')
       .setRequired(false)
       .addChoices(
-        { name: 'Rank by overlap (default)', value: 'overlap' },
-        { name: 'Rank by taste', value: 'taste' },
+        { name: 'Ühiste järgi (vaikimisi)', value: 'overlap' },
+        { name: 'Maitse järgi', value: 'taste' },
       ),
   );
 
@@ -92,8 +92,8 @@ const command: Command = {
       await interaction.editReply({
         embeds: [
           noticeEmbed(
-            `Nobody to match ${displayName} with yet`,
-            `Nobody else here has a linked, visible library with a game you have both played for more than ${fmtMinutes(min)}. Lower **min_playtime**, or get a friend to run **/games add**.`,
+            `${displayName} jaoks pole veel sobivust`,
+            `Kellelgi teisel siin pole nähtavat kogu mänguga, mida te mõlemad oleksite mänginud üle ${fmtMinutes(min)}. Proovi väiksemat **min_playtime** väärtust või kutsu sõber käivitama **/games add**.`,
             COLORS.warn,
           ),
         ],

@@ -31,7 +31,7 @@ const COMMUNITY_URL_RE =
 const SHORT_INVITE_RE = /^(?:https?:\/\/)?(?:[\w-]+\.)*s\.team\/p\//i;
 
 const INVITE_HELP =
-  'That is a friend-invite link, not a profile link. Open your profile and copy the URL from the address bar (it looks like steamcommunity.com/id/yourname or steamcommunity.com/profiles/7656119...).';
+  'See on sõbrakutse link, mitte profiili link. Ava oma profiil ja kopeeri aadressiribalt URL (kujul steamcommunity.com/id/sinunimi või steamcommunity.com/profiles/7656119...).';
 
 /** Reject group/gameserver ids and malformed values early with one message. */
 function assertIndividual(id64: string): string {
@@ -39,19 +39,19 @@ function assertIndividual(id64: string): string {
   try {
     sid = new SteamID(id64);
   } catch {
-    throw new SteamUserError(`"${id64}" is not a valid Steam ID.`);
+    throw new SteamUserError(`"${id64}" ei ole kehtiv Steam ID.`);
   }
   // isValid() would also accept groups and game servers, which have no library.
   if (!sid.isValidIndividual()) {
     throw new SteamUserError(
-      `"${id64}" is not an individual Steam account (groups and game servers do not have game libraries).`,
+      `"${id64}" ei ole isiklik Steami konto (gruppidel ja mänguserveritel ei ole mängukogu).`,
     );
   }
   return sid.getSteamID64();
 }
 
 function fromAccountId(accountId: bigint): string {
-  if (accountId < 0n) throw new SteamUserError('Steam account id cannot be negative.');
+  if (accountId < 0n) throw new SteamUserError('Steami konto ID ei saa olla negatiivne.');
   return (accountId + STEAM_ID64_BASE).toString();
 }
 
@@ -80,7 +80,7 @@ export function toSteam3(id64: string): string {
  */
 export function parseSteamInput(raw: string): SteamInput {
   const input = (raw ?? '').trim();
-  if (input === '') throw new SteamUserError('No Steam profile given.');
+  if (input === '') throw new SteamUserError('Steami profiili ei antud.');
 
   if (SHORT_INVITE_RE.test(input)) throw new SteamUserError(INVITE_HELP);
 
@@ -91,12 +91,12 @@ export function parseSteamInput(raw: string): SteamInput {
     switch (segment) {
       case 'profiles':
         if (!/^\d{17,20}$/.test(value)) {
-          throw new SteamUserError(`"${value}" is not a valid Steam ID.`);
+          throw new SteamUserError(`"${value}" ei ole kehtiv Steam ID.`);
         }
         return { kind: 'id64', id64: assertIndividual(value) };
       case 'id':
         if (!VANITY_RE.test(value)) {
-          throw new SteamUserError(`"${value}" is not a valid Steam custom URL name.`);
+          throw new SteamUserError(`"${value}" ei ole kehtiv Steami kohandatud nimi.`);
         }
         return { kind: 'vanity', vanity: value.toLowerCase() };
       case 'user':
@@ -104,10 +104,10 @@ export function parseSteamInput(raw: string): SteamInput {
         throw new SteamUserError(INVITE_HELP);
       case 'groups':
       case 'gid':
-        throw new SteamUserError('That is a Steam group, not a user profile.');
+        throw new SteamUserError('See on Steami grupp, mitte kasutaja profiil.');
       default:
         throw new SteamUserError(
-          'That Steam link does not point at a profile. Use steamcommunity.com/id/... or /profiles/...',
+          'See Steami link ei viita profiilile. Kasuta steamcommunity.com/id/... või /profiles/...',
         );
     }
   }
@@ -130,12 +130,12 @@ export function parseSteamInput(raw: string): SteamInput {
   }
 
   // A bare number that is not a valid id64 is a mistake, not a vanity name.
-  if (/^\d+$/.test(input)) throw new SteamUserError(`"${input}" is not a valid Steam ID.`);
+  if (/^\d+$/.test(input)) throw new SteamUserError(`"${input}" ei ole kehtiv Steam ID.`);
 
   if (VANITY_RE.test(input)) return { kind: 'vanity', vanity: input.toLowerCase() };
 
   throw new SteamUserError(
-    `I could not read "${input}" as a Steam profile. Paste your profile URL, your custom URL name, or your 17-digit Steam ID.`,
+    `Ei suutnud "${input}" Steami profiilina lugeda. Kleebi oma profiili aadress, kohandatud nimi või 17-kohaline Steam ID.`,
   );
 }
 
@@ -170,7 +170,7 @@ export async function resolveToId64(
   // so branch strictly rather than treating "not 42" as OK.
   if (response.success !== 1 || typeof response.steamid !== 'string') {
     throw new SteamUserError(
-      `No Steam account found for "${parsed.vanity}". Check the spelling, or paste your full profile URL.`,
+      `Nime "${parsed.vanity}" jaoks ei leitud Steami kontot. Kontrolli õigekirja või kleebi profiili täisaadress.`,
     );
   }
 

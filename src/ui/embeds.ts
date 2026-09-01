@@ -54,7 +54,7 @@ export const FAMILY_SHARING_URL =
 
 /** Prototype screen 1 footer -- appears on every link-success embed. */
 export const FAMILY_SHARING_FOOTER =
-  "Steam only exposes games you purchased yourself — family-shared games can't be read by any bot.";
+  'Steam näitab ainult ise ostetud mänge — pere jagatud mänge ükski bot ei näe.';
 
 /* -------------------------------------------------------------------------- */
 /* Formatting primitives                                                       */
@@ -69,9 +69,10 @@ export const FAMILY_SHARING_FOOTER =
  */
 export function fmtMinutes(m: Minutes): string {
   const mins = Number.isFinite(m) ? Math.max(0, Math.round(m)) : 0;
-  if (mins < 60) return `${mins}m`;
+  if (mins < 60) return `${mins} min`;
   const h = mins / 60;
-  return h >= 100 ? `${num(Math.round(h))} h` : `${h.toFixed(1)} h`;
+  // Estonian writes the decimal separator as a comma.
+  return h >= 100 ? `${num(Math.round(h))} h` : `${h.toFixed(1).replace('.', ',')} h`;
 }
 
 /** Aggregate playtime, always whole hours with a thousands separator: "3,847 h". */
@@ -81,7 +82,9 @@ export function fmtTotalHours(m: Minutes): string {
 }
 
 export function num(n: number): string {
-  return (Number.isFinite(n) ? n : 0).toLocaleString('en-US');
+  // Estonian groups thousands with a space. toLocaleString uses a non-breaking
+  // space, which is fine in Discord but awkward everywhere else, so normalise it.
+  return (Number.isFinite(n) ? n : 0).toLocaleString('et-EE').replace(/\u00a0/g, ' ');
 }
 
 export function plural(n: number, one: string, many = `${one}s`): string {
@@ -179,14 +182,12 @@ export function looksLikeSteamToken(s: unknown): boolean {
 export function tokenRefusalEmbed(): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(COLORS.err)
-    .setTitle('Never send that to a bot — including me')
+    .setTitle('Ära saada seda ühelegi botile')
     .setDescription(
       [
-        'That looks like a Steam **session token**. I deleted it without reading it, but you should treat it as compromised.',
+        'See näeb välja nagu Steami **seansitoken**. Ma ei lugenud ega salvestanud seda, aga pea seda lekkinuks.',
         '',
-        "Any bot asking you to paste one of those can also **delete your Steam family group** and **request purchases** with it. That's the standard Steam phishing script, and I will never ask you for one.",
-        '',
-        "I only ever use Steam's public API with my own key — which is also why family-shared games don't show up here.",
+        'Sellega saab kustutada su Steami perekonna ja teha oste. Mina kasutan ainult avalikku Steami API-t ja ei küsi seda kunagi.',
       ].join('\n'),
     );
 }
@@ -195,7 +196,7 @@ export function familySharingRow(): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setStyle(ButtonStyle.Link)
-      .setLabel('How family sharing works ↗')
+      .setLabel('Kuidas pere jagamine töötab ↗')
       .setURL(FAMILY_SHARING_URL),
   );
 }
@@ -207,17 +208,15 @@ export function familySharingRow(): ActionRowBuilder<ButtonBuilder> {
 export function consentEmbed(): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(COLORS.brand)
-    .setTitle('Before I import your library')
+    .setTitle('Enne kogu importimist')
     .setDescription(
       [
-        "Here's exactly what happens:",
+        '• Salvestan **mängude nimed ja mänguaja** ning su Steam ID.',
+        '• Neid näevad ainult **selle serveri** liikmed.',
+        '• Su Steam ID-d ei näidata kellelegi.',
+        '• **/steam unlink** kustutab kõik.',
         '',
-        '• I store your **game names and playtime**, and your Steam ID.',
-        "• Members of **this server only** can see which games you own and how long you've played them.",
-        '• Your Steam ID itself is **never** shown to anyone.',
-        '• **/steam unlink** deletes everything, immediately.',
-        '',
-        "I refresh your library about every 6 hours while you're using the bot.",
+        'Järgmisena valid nimekirjast, mida salvestada.',
       ].join('\n'),
     );
 }
@@ -227,11 +226,11 @@ export function consentRow(id: string): ActionRowBuilder<ButtonBuilder> {
     new ButtonBuilder()
       .setCustomId(`consent:${id}:yes`)
       .setStyle(ButtonStyle.Success)
-      .setLabel('I agree — import my library'),
+      .setLabel('Nõustun — impordi'),
     new ButtonBuilder()
       .setCustomId(`consent:${id}:no`)
       .setStyle(ButtonStyle.Secondary)
-      .setLabel('Cancel'),
+      .setLabel('Katkesta'),
   );
 }
 
@@ -249,7 +248,8 @@ export interface LinkSuccess {
   minPlaytime: Minutes;
   totalMinutes: Minutes;
   recentCount: number;
-  refreshHours: number;
+  /** Games the user unchecked on the import checklist, so they were not stored. */
+  excludedCount: number;
   guildName: string;
   /** Discord ID this was registered FOR, when a moderator added someone else. */
   forUserId?: string | null;
@@ -260,31 +260,36 @@ export function linkSuccessEmbed(s: LinkSuccess): EmbedBuilder {
     .setColor(COLORS.ok)
     .setAuthor({
       name: truncate(
-        s.forUserId ? `Added ${s.personaName}` : `Linked to ${s.personaName}`,
+        s.forUserId ? `Lisatud: ${s.personaName}` : `Ühendatud: ${s.personaName}`,
         LIMITS.author,
       ),
       ...(s.avatarUrl ? { iconURL: s.avatarUrl } : {}),
     })
     .setDescription(
       joinLines([
-        `Imported **${num(s.ownedTotal)} purchased ${plural(s.ownedTotal, 'game')}**.`,
-        `**${num(s.matchable)}** have more than ${fmtMinutes(s.minPlaytime)} played — those are the ones used for matching.`,
+        `Salvestatud **${num(s.matchable)} ${plural(s.matchable, 'mäng', 'mängu')}** (${num(s.ownedTotal)}-st).`,
+        ...(s.excludedCount > 0
+          ? [`${num(s.excludedCount)} ${plural(s.excludedCount, 'mängu', 'mängu')} jätsid välja.`]
+          : []),
         '',
         s.forUserId
-          ? `Registered for <@${s.forUserId}> in **${safeName(s.guildName, 100)}**. They are matchable now, every listing shows it was added by you, and they can remove it themselves with **/privacy**.`
-          : `You're now discoverable in **${safeName(s.guildName, 100)}**. Use **/privacy** to hide yourself at any time.`,
+          ? `Lisatud <@${s.forUserId}> jaoks serveris **${safeName(s.guildName, 100)}**. Ta saab selle ise eemaldada: **/privacy**`
+          : `Oled nüüd nähtav serveris **${safeName(s.guildName, 100)}**. Peida end: **/privacy**`,
       ]),
     )
     .addFields(
-      { name: 'Total playtime', value: fmtTotalHours(s.totalMinutes), inline: true },
+      { name: 'Mänguaeg kokku', value: fmtTotalHours(s.totalMinutes), inline: true },
       {
-        name: 'Played recently',
-        value: `${num(s.recentCount)} ${plural(s.recentCount, 'game')}`,
+        name: 'Hiljuti mängitud',
+        value: `${num(s.recentCount)} ${plural(s.recentCount, 'mäng', 'mängu')}`,
         inline: true,
       },
-      { name: 'Next refresh', value: `in ${s.refreshHours} h`, inline: true },
+      // There is no background refresh: Steam is contacted only when a person
+      // asks it to be. Advertising an automatic one would be a promise nothing
+      // in the bot keeps.
+      { name: 'Uuendamine', value: '`/steam update`', inline: true },
     )
-    .setFooter({ text: truncate(`${FAMILY_SHARING_FOOTER} Why?`, LIMITS.footer) });
+    .setFooter({ text: truncate(FAMILY_SHARING_FOOTER, LIMITS.footer) });
   if (s.avatarUrl) e.setThumbnail(s.avatarUrl);
   return e;
 }
@@ -311,68 +316,68 @@ export function profileStateMessage(
   personaName: string | null,
   minPlaytime: Minutes = 30,
 ): StateMessage {
-  const who = personaName ? `**${safeName(personaName, 64)}**` : 'that profile';
+  const who = personaName ? `**${safeName(personaName, 64)}**` : 'sellel profiilil';
   switch (state) {
     case 'public':
       return {
-        title: 'Library imported',
-        description: `I can see ${who}'s games. You're all set.`,
+        title: 'Kogu imporditud',
+        description: `Näen ${who} mänge. Kõik on valmis.`,
         color: COLORS.ok,
         privacyHelp: false,
       };
     case 'private':
       return {
-        title: 'Your Steam profile is private',
+        title: 'Su Steami profiil on privaatne',
         description: [
-          `I can't see anything on ${who}'s profile.`,
+          `Ma ei näe ${who} kohta midagi.`,
           '',
-          '**Fix:** Steam → Profile → Edit Profile → Privacy Settings → set **My profile** to **Public**, then run the command again.',
+          '**Paranda:** Steam → Profiil → Muuda profiili → Privaatsus → **Minu profiil** = **Avalik**. Seejärel proovi uuesti.',
         ].join('\n'),
         color: COLORS.err,
         privacyHelp: true,
       };
     case 'game_details_private':
       return {
-        title: "Your profile is public, but your game details aren't",
+        title: 'Profiil on avalik, mängude info mitte',
         description: [
-          'This trips up almost everyone — Steam has a **separate** setting for your games list.',
+          'Steamis on mängude nimekirjal **eraldi** säte.',
           '',
-          '**Fix:** Steam → Profile → Edit Profile → Privacy Settings → **Game details** → **Public**.',
+          '**Paranda:** Steam → Profiil → Muuda profiili → Privaatsus → **Game details** = **Public**.',
           '',
-          `Also uncheck **"Always keep my total playtime private"** just below it, or every game imports as 0 minutes and nothing passes the ${fmtMinutes(minPlaytime)} filter.`,
+          'Eemalda ka linnuke **"Always keep my total playtime private"**, muidu tuleb iga mäng 0 minutiga.',
         ].join('\n'),
         color: COLORS.warn,
         privacyHelp: true,
       };
     case 'playtime_hidden':
       return {
-        title: 'I can see your games, but not your playtime',
+        title: 'Näen su mänge, aga mitte mänguaega',
         description: [
-          `Every game on ${who} imported as 0 minutes, so nothing clears the ${fmtMinutes(minPlaytime)} filter and you won't match with anyone.`,
+          `Iga mäng ${who} tuli 0 minutiga, nii et sa ei sobitu kellegagi.`,
           '',
-          '**Fix:** Steam → Profile → Edit Profile → Privacy Settings → uncheck **"Always keep my total playtime private"**, then run **/steam refresh**.',
+          '**Paranda:** Steam → Profiil → Muuda profiili → Privaatsus → eemalda linnuke **"Always keep my total playtime private"**. Seejärel **/steam update**.',
         ].join('\n'),
         color: COLORS.warn,
         privacyHelp: true,
       };
     case 'empty':
       return {
-        title: 'That Steam account owns no games',
+        title: 'Sellel Steami kontol pole mänge',
         description: [
-          `${who} is public and readable — there just isn't anything in it.`,
+          `${who} on avalik ja loetav — seal lihtsalt pole midagi.`,
           '',
-          "If that's the wrong account, run **/games add** again with the right profile URL. Remember that family-shared games belong to the person who bought them and never appear here.",
+          'Kui see on vale konto, käivita **/games add** õige profiili aadressiga.',
         ].join('\n'),
         color: COLORS.warn,
         privacyHelp: false,
       };
     case 'error':
       return {
-        title: "Steam didn't answer",
+        title: 'Steam ei vastanud',
         description: [
-          "I couldn't reach Steam's API, so nothing was imported and nothing was changed.",
+          'Ei saanud Steamiga ühendust — midagi ei imporditud ega muudetud.',
           '',
-          'This is usually Steam being down for a few minutes. Try again shortly — if it keeps happening, it is on my side, not yours.',
+          'Tavaliselt on Steam paar minutit maas. Proovi natukese aja pärast uuesti.',
         ].join('\n'),
         color: COLORS.err,
         privacyHelp: false,
@@ -399,7 +404,7 @@ export function retryRow(id: string, withPrivacyLink = true): ActionRowBuilder<B
     row.addComponents(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
-        .setLabel('Open Steam privacy settings ↗')
+        .setLabel('Ava Steami privaatsussätted ↗')
         .setURL(STEAM_PRIVACY_URL),
     );
   }
@@ -407,7 +412,7 @@ export function retryRow(id: string, withPrivacyLink = true): ActionRowBuilder<B
     new ButtonBuilder()
       .setCustomId(`retry:${id}`)
       .setStyle(ButtonStyle.Primary)
-      .setLabel('Try again'),
+      .setLabel('Proovi uuesti'),
   );
   return row;
 }
@@ -439,28 +444,32 @@ export function libraryEmbed(v: LibraryView): EmbedBuilder {
   // The total only counts games that actually have playtime, so a library of
   // hand-added games does not claim "0 h total" as though it were measured.
   const header =
-    `**${num(v.matching)}** ${plural(v.matching, 'game')}` +
-    (v.filter > 0 ? ` over ${fmtMinutes(v.filter)}` : '') +
-    (v.matchingMinutes > 0 ? ` · ${fmtTotalHours(v.matchingMinutes)} total` : '');
+    `**${num(v.matching)}** ${plural(v.matching, 'mäng', 'mängu')}` +
+    (v.filter > 0 ? ` üle ${fmtMinutes(v.filter)}` : '') +
+    (v.matchingMinutes > 0 ? ` · ${fmtTotalHours(v.matchingMinutes)} kokku` : '');
   // An untracked (hand-added) game has NO playtime. Printing `0m` would read as
   // "never played" when it actually means "unknown", so mark it instead.
-  const lines = v.pageRows.map((g, i) =>
-    g.tracked
-      ? `${rank(v.offset + i + 1)} **${gameName(g.name)}** · \`${fmtMinutes(g.playtime)}\``
-      : `${rank(v.offset + i + 1)} **${gameName(g.name)}** · *added by hand*`,
-  );
-  const body = lines.length > 0 ? lines : ['*Nothing clears this filter.*'];
+  // A hidden game is still the owner's, so it stays in their own list -- but
+  // silently, it would look like /steam change had done nothing.
+  const lines = v.pageRows.map((g, i) => {
+    const suffix = g.tracked ? `\`${fmtMinutes(g.playtime)}\`` : '*käsitsi lisatud*';
+    const mark = g.hidden ? ` · ${HIDDEN_MARK} peidetud` : '';
+    return `${rank(v.offset + i + 1)} **${gameName(g.name)}** · ${suffix}${mark}`;
+  });
+  const body = lines.length > 0 ? lines : ['*Selle filtriga pole midagi.*'];
+  const hiddenCount = v.pageRows.filter((g) => g.hidden).length;
   const footer = [
-    `Page ${v.page + 1}/${v.pages}`,
-    v.syncedAgo ? `synced ${v.syncedAgo}` : null,
-    `${num(v.ownedTotal)} games owned, ${num(v.matching)} above the filter`,
+    `Lk ${v.page + 1}/${v.pages}`,
+    v.syncedAgo ? `uuendatud ${v.syncedAgo}` : null,
+    `${num(v.ownedTotal)} ${plural(v.ownedTotal, 'mäng', 'mängu')} kokku`,
+    hiddenCount > 0 ? `${HIDDEN_MARK} peidetud · /steam change` : null,
   ]
     .filter((x): x is string => x !== null)
     .join(' · ');
 
   return new EmbedBuilder()
     .setColor(COLORS.brand)
-    .setTitle(truncate(`${escapeMd(v.displayName)}'s library`, LIMITS.title))
+    .setTitle(truncate(`${escapeMd(v.displayName)} kogu`, LIMITS.title))
     .setDescription(joinLines([header, '', ...body]))
     .setFooter({ text: truncate(footer, LIMITS.footer) });
 }
@@ -488,26 +497,26 @@ export function sharedEmbed(v: SharedView): EmbedBuilder {
   const lines = v.pageRows.map(
     (r, i) => `${rank(v.offset + i + 1)} **${gameName(r.name)}**`,
   );
-  const body = lines.length > 0 ? lines : ['*No games in common above this filter.*'];
+  const body = lines.length > 0 ? lines : ['*Selle filtriga pole ühiseid mänge.*'];
 
   return new EmbedBuilder()
     .setColor(COLORS.brand)
     .setTitle(
       truncate(
-        `${me} & ${them} — ${num(v.total)} ${plural(v.total, 'game')} in common`,
+        `${me} & ${them} — ${num(v.total)} ${plural(v.total, 'ühine mäng', 'ühist mängu')}`,
         LIMITS.title,
       ),
     )
     .setDescription(
       joinLines([
-        `Both played over ${fmtMinutes(v.filter)}. Sorted by whoever's played it least, so the top of the list is what you can actually play together tonight.`,
+        `Mõlemal üle ${fmtMinutes(v.filter)}. Ülal on see, mida vähem mängitud.`,
         '',
         ...body,
       ]),
     )
     .setFooter({
       text: truncate(
-        `Showing ${num(v.pageRows.length)} of ${num(v.total)} · ${me} ${num(v.myLibrarySize)} games · ${them} ${num(v.theirLibrarySize)} games`,
+        `${num(v.pageRows.length)}/${num(v.total)} · ${me} ${num(v.myLibrarySize)} · ${them} ${num(v.theirLibrarySize)}`,
         LIMITS.footer,
       ),
     });
@@ -521,7 +530,8 @@ export interface WhoView {
   owners: OwnerRow[];
   filter: Minutes;
   iconUrl: string | null;
-  storeUrl: string;
+  /** Null for a manually added game: it has no Steam appid and so no store page. */
+  storeUrl: string | null;
   /** Total eligible owners above the filter, which may exceed `owners.length`. */
   totalOwners?: number;
 }
@@ -544,11 +554,14 @@ export function steamTag(personaName: string | null | undefined): string {
  * account really belongs to that person -- so listings must not present them
  * as equivalent to a self-link.
  */
+/** Marks a game the owner has hidden from the rest of the server. */
+export const HIDDEN_MARK = '🔒';
+
 export const ADDED_MARK = '✎';
 export function addedMark(addedBy: string | null | undefined): string {
   return addedBy ? ` ${ADDED_MARK}` : '';
 }
-export const ADDED_FOOTNOTE = `${ADDED_MARK} added by a moderator, not self-linked`;
+export const ADDED_FOOTNOTE = `${ADDED_MARK} lisas moderaator, mitte kasutaja ise`;
 
 /** Deep Rock Galactic. The prototype has this easter egg; it stays. */
 const DRG_APPID = 548430;
@@ -562,12 +575,12 @@ export function whoEmbed(v: WhoView): EmbedBuilder {
   const lines = v.owners.map(
     (o, i) => `${rank(i + 1)} <@${o.userId}>${steamTag(o.personaName)}${addedMark(o.addedBy)}`,
   );
-  const body = lines.length > 0 ? lines : ['*Nobody here has played it above this filter yet.*'];
+  const body = lines.length > 0 ? lines : ['*Selle filtriga pole veel kedagi.*'];
   const footer = [
     v.appid === DRG_APPID ? 'Rock and Stone!' : null,
-    n > shown ? `showing top ${num(shown)}` : null,
+    n > shown ? `näitan ${num(shown)} esimest` : null,
     v.owners.some((o) => o.addedBy) ? ADDED_FOOTNOTE : null,
-    `min playtime ${fmtMinutes(v.filter)}`,
+    `vähemalt ${fmtMinutes(v.filter)}`,
   ]
     .filter((x): x is string => x !== null)
     .join(' · ');
@@ -575,10 +588,12 @@ export function whoEmbed(v: WhoView): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(COLORS.brand)
     .setTitle(truncate(escapeMd(v.name), LIMITS.title))
+    // A manual game has no store page; linking the title to /app/-1 would give
+    // the reader a 404 dressed up as the game's own page.
     .setURL(v.storeUrl)
     .setDescription(
       joinLines([
-        `**${num(n)} ${plural(n, 'person', 'people')}** here ${n === 1 ? 'has' : 'have'} played it for more than ${fmtMinutes(v.filter)}.`,
+        `**${num(n)} ${plural(n, 'inimene', 'inimest')}** siin on seda mänginud üle ${fmtMinutes(v.filter)}.`,
         '',
         ...body,
       ]),
@@ -587,19 +602,26 @@ export function whoEmbed(v: WhoView): EmbedBuilder {
     .setThumbnail(v.iconUrl);
 }
 
-export function whoRow(sessionId: string, count: number, storeUrl: string): ActionRowBuilder<ButtonBuilder> {
+export function whoRow(
+  sessionId: string,
+  count: number,
+  /** Null for a manually added game, which has no store page to link to. */
+  storeUrl: string | null,
+): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
   if (count > 0) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:ping`)
         .setStyle(ButtonStyle.Primary)
-        .setLabel(truncate(`Ping ${count === 1 ? 'them' : `these ${count}`}`, LIMITS.buttonLabel)),
+        .setLabel(truncate(count === 1 ? 'Pingi teda' : `Pingi neid ${count}`, LIMITS.buttonLabel)),
     );
   }
-  row.addComponents(
-    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Store page ↗').setURL(storeUrl),
-  );
+  if (storeUrl !== null) {
+    row.addComponents(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Poe leht ↗').setURL(storeUrl),
+    );
+  }
   return row;
 }
 
@@ -627,24 +649,24 @@ export function matchEmbed(v: MatchView): EmbedBuilder {
     const pct = `${Math.round(m.jaccard * 100)}%`;
     return (
       `${rank(v.offset + i + 1)} <@${m.userId}>${steamTag(m.personaName)}${addedMark(m.addedBy)}\n` +
-      ` \`${num(m.overlap)} ${plural(m.overlap, 'game')}\` overlap · \`${pct}\` taste · ${num(m.theirTotal)} in their library`
+      ` \`${num(m.overlap)} ${plural(m.overlap, 'ühine', 'ühist')}\` · \`${pct}\` maitse · ${num(m.theirTotal)} nende kogus`
     );
   });
-  const body = lines.length > 0 ? lines : ['*Nobody else here clears this filter yet.*'];
+  const body = lines.length > 0 ? lines : ['*Selle filtriga pole veel kedagi.*'];
 
   return new EmbedBuilder()
     .setColor(COLORS.brand)
-    .setTitle(truncate(`People most like ${escapeMd(v.displayName)}`, LIMITS.title))
+    .setTitle(truncate(`Kõige sarnasemad: ${escapeMd(v.displayName)}`, LIMITS.title))
     .setDescription(
       joinLines([
-        `Ranked across **${num(v.memberCount)} linked ${plural(v.memberCount, 'member')}** of this server, games with ${fmtMinutes(v.filter)}+ on both sides.`,
+        `**${num(v.memberCount)} ühendatud ${plural(v.memberCount, 'liige', 'liiget')}** selles serveris, mõlemal üle ${fmtMinutes(v.filter)}.`,
         '',
         ...body,
       ]),
     )
     .setFooter({
       text: truncate(
-        `Overlap = shared games · Taste = shared ÷ combined, which ignores library size · sorted by ${v.sort}`,
+        `Ühised = kattuvad mängud · Maitse = ühised ÷ kokku · järjestus: ${v.sort === 'taste' ? 'maitse' : 'ühised'}`,
         LIMITS.footer,
       ),
     });
@@ -658,11 +680,11 @@ export function matchSortRow(
     new ButtonBuilder()
       .setCustomId(`px:${sessionId}:overlap`)
       .setStyle(active === 'overlap' ? ButtonStyle.Primary : ButtonStyle.Secondary)
-      .setLabel('Rank by overlap'),
+      .setLabel('Ühiste järgi'),
     new ButtonBuilder()
       .setCustomId(`px:${sessionId}:taste`)
       .setStyle(active === 'taste' ? ButtonStyle.Primary : ButtonStyle.Secondary)
-      .setLabel('Rank by taste'),
+      .setLabel('Maitse järgi'),
   );
 }
 
@@ -685,11 +707,11 @@ export function leaderboardEmbed(v: LeaderboardView): EmbedBuilder {
   const mine = v.scope === 'mine';
   const lines = v.pageRows.map(
     (g, i) =>
-      `${rank(v.offset + i + 1)} **${gameName(g.name)}** · \`${num(g.owners)} ${plural(g.owners, 'person', 'people')}\``,
+      `${rank(v.offset + i + 1)} **${gameName(g.name)}** · \`${num(g.owners)} ${plural(g.owners, 'inimene', 'inimest')}\``,
   );
   const empty = mine
-    ? '*Nobody here shares a game with you yet.*'
-    : '*No game here has two players above this filter yet.*';
+    ? '*Keegi siin ei jaga sinuga veel ühtki mängu.*'
+    : '*Ühelgi mängul pole veel kahte mängijat selle filtriga.*';
   const body = lines.length > 0 ? lines : [empty];
 
   return new EmbedBuilder()
@@ -697,23 +719,23 @@ export function leaderboardEmbed(v: LeaderboardView): EmbedBuilder {
     .setTitle(
       truncate(
         mine
-          ? 'Your games — most shared here'
-          : `${safeName(v.guildName, 80)} — most owned games`,
+          ? 'Sinu mängud — enim jagatud'
+          : `${safeName(v.guildName, 80)} — enim mängitud`,
         LIMITS.title,
       ),
     )
     .setDescription(
       joinLines([
         mine
-          ? `Games you have, ranked by how many people here have them too. Counts include you.`
-          : `Games at least 2 members have played for ${fmtMinutes(v.filter)}+.`,
+          ? 'Sinu mängud, järjestatud selle järgi, mitu inimest siin neid veel mängib.'
+          : `Mängud, mida vähemalt 2 liiget on mänginud üle ${fmtMinutes(v.filter)}.`,
         '',
         ...body,
       ]),
     )
     .setFooter({
       text: truncate(
-        `${num(v.memberCount)} linked ${plural(v.memberCount, 'member')} · ${num(v.distinctGames)} distinct games · page ${v.page + 1}/${v.pages}`,
+        `${num(v.memberCount)} ${plural(v.memberCount, 'liige', 'liiget')} · ${num(v.distinctGames)} erinevat mängu · lk ${v.page + 1}/${v.pages}`,
         LIMITS.footer,
       ),
     });
@@ -733,17 +755,17 @@ export interface PrivacyView {
 export function privacyEmbed(v: PrivacyView): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(COLORS.brand)
-    .setTitle('Your privacy settings')
+    .setTitle('Sinu privaatsussätted')
     .setDescription(
       joinLines([
         v.linked
-          ? 'Your Steam library is linked. Your Steam ID itself is **never** shown to anyone.'
-          : 'No Steam account linked yet — run **/games add** to get started.',
+          ? 'Steami kogu on ühendatud. Su Steam ID-d ei näidata kellelegi.'
+          : 'Steami kontot pole ühendatud — alusta käsuga **/games add**.',
         '',
-        `**Discoverable everywhere** — ${v.discoverable ? 'on' : 'off'}. When off you never appear in anyone's /match, /games who or /games leaderboard, in any server.`,
-        `**Visible in ${safeName(v.guildName, 80)}** — ${v.guildVisible ? 'on' : 'off'}. Hides you in this one server only.`,
+        `**Nähtav kõikjal** — ${v.discoverable ? 'sees' : 'väljas'}. Väljas: sa ei ilmu üheski serveris kellegi tulemustes.`,
+        `**Nähtav serveris ${safeName(v.guildName, 80)}** — ${v.guildVisible ? 'sees' : 'väljas'}. Peidab sind ainult siin.`,
         '',
-        '**Forget me** deletes your Steam link, your games and your playtime immediately. It cannot be undone.',
+        '**Unusta mind** kustutab Steami ühenduse, mängud ja mänguaja. Seda ei saa tagasi võtta.',
       ]),
     );
 }
@@ -757,17 +779,17 @@ export function privacyRows(
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:discoverable`)
         .setStyle(v.discoverable ? ButtonStyle.Success : ButtonStyle.Secondary)
-        .setLabel(v.discoverable ? 'Discoverable: on' : 'Discoverable: off'),
+        .setLabel(v.discoverable ? 'Nähtav kõikjal: sees' : 'Nähtav kõikjal: väljas'),
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:visible`)
         .setStyle(v.guildVisible ? ButtonStyle.Success : ButtonStyle.Secondary)
-        .setLabel(v.guildVisible ? 'Visible here: on' : 'Visible here: off'),
+        .setLabel(v.guildVisible ? 'Nähtav siin: sees' : 'Nähtav siin: väljas'),
     ),
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:forget`)
         .setStyle(ButtonStyle.Danger)
-        .setLabel('Forget me'),
+        .setLabel('Unusta mind'),
     ),
   ];
 }
@@ -778,11 +800,11 @@ export function forgetConfirmRow(sessionId: string): ActionRowBuilder<ButtonBuil
     new ButtonBuilder()
       .setCustomId(`px:${sessionId}:forget_yes`)
       .setStyle(ButtonStyle.Danger)
-      .setLabel('Yes, delete everything'),
+      .setLabel('Jah, kustuta kõik'),
     new ButtonBuilder()
       .setCustomId(`px:${sessionId}:forget_no`)
       .setStyle(ButtonStyle.Secondary)
-      .setLabel('Keep my data'),
+      .setLabel('Jäta alles'),
   );
 }
 
@@ -802,15 +824,106 @@ export function noticeEmbed(
 }
 
 export function errorEmbed(description: string): EmbedBuilder {
-  return noticeEmbed('That did not work', description, COLORS.err);
+  return noticeEmbed('See ei õnnestunud', description, COLORS.err);
 }
 
 export function notLinkedEmbed(): EmbedBuilder {
   return noticeEmbed(
-    'You have not linked a Steam account',
-    'Run **/games add** with your profile URL or Steam ID first. Nothing is stored until you agree to the consent prompt.',
+    'Steami kontot pole ühendatud',
+    'Käivita esmalt **/games add** ja sisesta oma profiili aadress või Steam ID.',
     COLORS.warn,
   );
+}
+
+/* --- Reaction roles -------------------------------------------------------- */
+
+export interface RolePanelView {
+  title: string;
+  description: string;
+  exclusive: boolean;
+  rows: ReadonlyArray<{ emojiRaw: string; roleId: string }>;
+}
+
+/**
+ * The public panel message. Roles are rendered as mentions rather than names so
+ * they stay correct when a role is renamed or recoloured; `allowedMentions` on
+ * the send is what stops that pinging everyone who holds one.
+ */
+export function rolePanelEmbed(v: RolePanelView): EmbedBuilder {
+  const lines =
+    v.rows.length > 0
+      ? v.rows.map((r) => `${r.emojiRaw} — <@&${r.roleId}>`)
+      : ['*Ühtegi rolli pole veel lisatud.*'];
+
+  return new EmbedBuilder()
+    .setColor(COLORS.brand)
+    .setTitle(truncate(v.title, LIMITS.title))
+    .setDescription(
+      joinLines([
+        ...(v.description ? [v.description, ''] : []),
+        ...lines,
+        '',
+        v.exclusive
+          ? '*Vali üks. Uue valimine eemaldab eelmise.*'
+          : '*Reageeri rolli saamiseks. Eemalda reaktsioon, et roll ära anda.*',
+      ]),
+    );
+}
+
+/* --- The import / visibility checklist ------------------------------------ */
+
+export interface ChecklistView {
+  title: string;
+  /** One line of context above the list. Already-safe text: we author it. */
+  intro: string;
+  /** The rows on the current page, in order, with their current check state. */
+  pageRows: ReadonlyArray<{ label: string; checked: boolean; note?: string }>;
+  offset: number;
+  page: number;
+  pages: number;
+  checked: number;
+  total: number;
+  /** What being checked MEANS here -- it differs per checklist. */
+  checkedMeans: string;
+  uncheckedMeans: string;
+}
+
+/**
+ * The paginated checklist body.
+ *
+ * The box glyphs are the whole point: a Discord select menu shows its own
+ * selection state only while the menu is open, so without an explicit rendered
+ * list the user cannot see what they have checked on any page but this one.
+ */
+export function checklistEmbed(v: ChecklistView): EmbedBuilder {
+  const lines = v.pageRows.map(
+    (r, i) =>
+      `${r.checked ? '☑' : '☐'} ${rank(v.offset + i + 1)} ${
+        r.checked ? `**${gameName(r.label)}**` : gameName(r.label)
+      }${r.note ? ` · ${r.note}` : ''}`,
+  );
+  const header =
+    `**${num(v.checked)}** / **${num(v.total)}** valitud` +
+    (v.pages > 1 ? ` · näitan ${num(v.offset + 1)}–${num(v.offset + v.pageRows.length)}` : '');
+
+  return new EmbedBuilder()
+    .setColor(COLORS.brand)
+    .setTitle(truncate(v.title, LIMITS.title))
+    .setDescription(
+      joinLines([
+        v.intro,
+        '',
+        header,
+        '',
+        ...(lines.length > 0 ? lines : ['*Pole midagi näidata.*']),
+      ]),
+    )
+    .setFooter({
+      text: truncate(
+        `Lk ${v.page + 1}/${v.pages} · linnuke = ${v.checkedMeans} · ilma = ${v.uncheckedMeans}`,
+        LIMITS.footer,
+      ),
+    });
 }
 
 /* --- /games add panel ------------------------------------------------------ */
@@ -832,15 +945,15 @@ export interface AddPanelView {
  * this", while manual games only answer "do you play this at all".
  */
 export function addPanelEmbed(v: AddPanelView): EmbedBuilder {
-  const whose = v.forUserId ? `<@${v.forUserId}>'s games` : 'Your games';
+  const whose = v.forUserId ? `<@${v.forUserId}> mängud` : 'Sinu mängud';
   const lines = [
     v.steamLinked
-      ? `**${num(v.steamCount)}** from Steam · **${num(v.manualCount)}** added by hand`
-      : `**${num(v.manualCount)}** ${plural(v.manualCount, 'game')} added by hand. No Steam account linked yet.`,
+      ? `**${num(v.steamCount)}** Steamist · **${num(v.manualCount)}** käsitsi lisatud`
+      : `**${num(v.manualCount)}** käsitsi lisatud ${plural(v.manualCount, 'mäng', 'mängu')}. Steami kontot pole ühendatud.`,
     '',
     v.catalogCount > 0
-      ? `Pick from the **${num(v.catalogCount)}** ${plural(v.catalogCount, 'game')} other people here already have, or add one that is not listed.`
-      : 'Nobody here has added a game yet — whatever you add becomes a one-click option for everyone else.',
+      ? `Vali **${num(v.catalogCount)}** mängu seast, mis teistel siin juba on, või lisa uus.`
+      : 'Keegi pole veel mänge lisanud — mille sina lisad, saab teistele ühe klikiga valitavaks.',
   ];
   return new EmbedBuilder()
     .setColor(COLORS.brand)
@@ -848,7 +961,7 @@ export function addPanelEmbed(v: AddPanelView): EmbedBuilder {
     .setDescription(joinLines(lines))
     .setFooter({
       text: truncate(
-        'Games added by hand have no playtime, so they always show regardless of any playtime filter.',
+        'Käsitsi lisatud mängudel pole mänguaega, seega need läbivad alati iga filtri.',
         LIMITS.footer,
       ),
     });

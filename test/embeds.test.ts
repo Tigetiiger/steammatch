@@ -27,15 +27,16 @@ import type { GameRow, LeaderRow, MatchRow, ProfileState, SharedRow } from '../s
 
 describe('fmtMinutes', () => {
   it('renders sub-hour playtime in bare minutes', () => {
-    expect(fmtMinutes(45)).toBe('45m');
-    expect(fmtMinutes(0)).toBe('0m');
-    expect(fmtMinutes(59)).toBe('59m');
+    expect(fmtMinutes(45)).toBe('45 min');
+    expect(fmtMinutes(0)).toBe('0 min');
+    expect(fmtMinutes(59)).toBe('59 min');
   });
 
   it('switches to one decimal hour at exactly 60 minutes', () => {
-    expect(fmtMinutes(60)).toBe('1.0 h');
-    expect(fmtMinutes(90)).toBe('1.5 h');
-    expect(fmtMinutes(5999)).toBe('100.0 h');
+    // Estonian decimal separator is a comma.
+    expect(fmtMinutes(60)).toBe('1,0 h');
+    expect(fmtMinutes(90)).toBe('1,5 h');
+    expect(fmtMinutes(5999)).toBe('100,0 h');
   });
 
   it('drops the decimal from 100 hours up', () => {
@@ -44,17 +45,23 @@ describe('fmtMinutes', () => {
     expect(fmtMinutes(6000)).toBe('100 h');
   });
 
-  it('adds a thousands separator to huge playtimes', () => {
-    expect(fmtMinutes(60 * 1234)).toBe('1,234 h');
+  it('groups thousands with a plain space, as Estonian does', () => {
+    // Estonian does not group four-digit numbers, only five and up. That is
+    // the locale being right, not a bug. The separator is normalised from the
+    // non-breaking space toLocaleString emits.
+    expect(fmtMinutes(60 * 1234)).toBe('1234 h');
+    expect(fmtMinutes(60 * 12345)).toBe('12 345 h');
+    expect(fmtMinutes(60 * 12345)).not.toContain('\u00a0');
   });
 
   it('never produces NaN or negative output', () => {
-    expect(fmtMinutes(Number.NaN)).toBe('0m');
-    expect(fmtMinutes(-10)).toBe('0m');
+    expect(fmtMinutes(Number.NaN)).toBe('0 min');
+    expect(fmtMinutes(-10)).toBe('0 min');
   });
 
   it('formats aggregate totals as whole hours', () => {
-    expect(fmtTotalHours(60 * 3847)).toBe('3,847 h');
+    expect(fmtTotalHours(60 * 3847)).toBe('3847 h');
+    expect(fmtTotalHours(60 * 38470)).toBe('38 470 h');
     expect(fmtTotalHours(0)).toBe('0 h');
   });
 });
@@ -133,6 +140,7 @@ describe('defensive truncation against Discord limits', () => {
       name: evil,
       playtime: 24720 - i,
       tracked: true,
+      hidden: false,
     }));
 
   it('keeps a library page description under 4096 even with pathological names', () => {
@@ -163,7 +171,7 @@ describe('defensive truncation against Discord limits', () => {
   it('escapes game names so a title cannot italicise the rest of the embed', () => {
     const e = libraryEmbed({
       displayName: 'artur',
-      pageRows: [{ appid: 1, name: '*Hell*_divers_', playtime: 4800 , tracked: true }],
+      pageRows: [{ appid: 1, name: '*Hell*_divers_', playtime: 4800, tracked: true, hidden: false }],
       offset: 0,
       page: 0,
       pages: 1,
@@ -267,7 +275,7 @@ describe('matchEmbed', () => {
         filter: 30,
         sort,
       }).toJSON().description;
-      expect(desc).toContain('68 games');
+      expect(desc).toContain('68 ühist');
       expect(desc).toContain('32%');
       expect(desc).toContain('<@42>');
     }
@@ -342,12 +350,16 @@ describe('profileStateMessage', () => {
     const priv = profileStateMessage('private', 'arturplays', 30);
     const details = profileStateMessage('game_details_private', 'arturplays', 30);
 
-    expect(priv.title).toBe('Your Steam profile is private');
-    expect(priv.description).toContain('My profile');
-    expect(priv.description).toContain('Public');
+    expect(priv.title).toBe('Su Steami profiil on privaatne');
+    expect(priv.description).toContain('Minu profiil');
+    expect(priv.description).toContain('Avalik');
+    // The Steam setting names stay in English because that is what the Steam UI
+    // shows -- translating them would send the user hunting for a label that
+    // does not exist. Which is exactly why this one must not leak into the
+    // "whole profile is private" message.
     expect(priv.description).not.toContain('Game details');
 
-    expect(details.title).toBe("Your profile is public, but your game details aren't");
+    expect(details.title).toBe('Profiil on avalik, mängude info mitte');
     expect(details.description).toContain('Game details');
     expect(details.description).toContain('Always keep my total playtime private');
   });
@@ -365,7 +377,12 @@ describe('profileStateMessage', () => {
     expect(m.description).toContain('\\*evil\\*');
   });
 
-  it('reports the active threshold in the game-details fix', () => {
-    expect(profileStateMessage('game_details_private', null, 600).description).toContain('10.0 h');
+  it('does not restate the playtime threshold in the fix instructions', () => {
+    // The threshold used to be spelled out here and in half a dozen other
+    // places. It is on screen already, next to every filter; repeating it in
+    // the middle of a fix-your-settings walkthrough was noise.
+    const m = profileStateMessage('game_details_private', null, 600);
+    expect(m.description).not.toContain('10,0 h');
+    expect(m.description).toContain('Game details');
   });
 });

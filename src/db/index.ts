@@ -53,11 +53,26 @@ function migrate(db: Database): void {
   addColumnIfMissing(db, 'steam_accounts', 'added_by', 'TEXT');
   addColumnIfMissing(db, 'games', 'source', "TEXT NOT NULL DEFAULT 'steam'");
   addColumnIfMissing(db, 'user_games', 'playtime_tracked', 'INTEGER NOT NULL DEFAULT 1');
+  // Per-game visibility, set from /steam change. 1 means the row still counts
+  // as the owner's own game but is withheld from every guild-facing query.
+  addColumnIfMissing(db, 'user_games', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
   // The partial unique index depends on games.source, so it cannot live in
   // schema.sql for databases created before that column existed.
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_games_manual_name
        ON games(name_folded) WHERE source = 'manual'`,
+  );
+  // Same reason: it references the migrated `hidden` column, so schema.sql --
+  // which runs before this function -- cannot hold it.
+  //
+  // This view is to per-game visibility what eligible_members is to per-user
+  // visibility: the ONE place the predicate is written. Every guild-facing
+  // query reads user_games through it, so none of them can omit the check.
+  db.exec(
+    `CREATE VIEW IF NOT EXISTS visible_user_games AS
+       SELECT user_id, appid, playtime_forever, playtime_2weeks, playtime_tracked, updated_at
+       FROM user_games
+       WHERE hidden = 0`,
   );
 }
 

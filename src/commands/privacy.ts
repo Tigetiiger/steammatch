@@ -30,7 +30,7 @@ import { clearConsent } from './user-state.js';
 
 const data = new SlashCommandBuilder()
   .setName('privacy')
-  .setDescription('Control who can see your library, or delete everything');
+  .setDescription('Halda, kes su kogu näeb, või kustuta kõik');
 
 const COLLECTOR_IDLE_MS = 120_000;
 const COLLECTOR_TIME_MS = 14 * 60_000;
@@ -82,7 +82,7 @@ const command: Command = {
           // Ephemeral, so only the invoker can even see this -- but check anyway.
           if (i.user.id !== userId) {
             await i.reply({
-              content: "These buttons aren't for you.",
+              content: 'Need nupud pole sinu omad.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -103,8 +103,8 @@ const command: Command = {
             await i.update({
               embeds: [
                 noticeEmbed(
-                  'Delete everything?',
-                  'This removes your Steam link, every game name and every playtime I hold for you. It is immediate and cannot be undone.',
+                  'Kustutada kõik?',
+                  'See eemaldab su Steami ühenduse, kõik mängud ja mänguajad. Seda ei saa tagasi võtta.',
                   COLORS.err,
                 ),
               ],
@@ -120,8 +120,8 @@ const command: Command = {
             await i.update({
               embeds: [
                 noticeEmbed(
-                  'Deleted',
-                  'Everything I held about you is gone. You will not appear in anyone\'s /match, /games who or /games leaderboard.\n\nIf you change your mind, **/games add** starts fresh — with the consent prompt again.',
+                  'Kustutatud',
+                  'Kõik sinu kohta salvestatu on kustutatud. Sa ei ilmu enam kellegi tulemustes.\n\nKui ümber mõtled, alusta uuesti: **/games add**',
                   COLORS.ok,
                 ),
               ],
@@ -140,7 +140,7 @@ const command: Command = {
           if (!i.replied && !i.deferred) {
             await i
               .reply({
-                content: 'That did not go through. Run **/privacy** again.',
+                content: 'See ei läinud läbi. Käivita **/privacy** uuesti.',
                 flags: MessageFlags.Ephemeral,
               })
               .catch(() => {});

@@ -79,3 +79,67 @@ SELECT gm.guild_id, gm.user_id
 FROM guild_members gm
 JOIN users u ON u.user_id = gm.user_id
 WHERE gm.visible = 1 AND u.opted_in = 1 AND u.discoverable = 1 AND u.deleted_at IS NULL;
+
+-- Steam appids the user unchecked on the post-sync checklist. Sync consults
+-- this table itself rather than trusting its caller to pass a filter, for the
+-- same reason eligible_members is a view: a predicate that lives in one place
+-- cannot be forgotten by a new call site.
+--
+-- `name` is denormalised on purpose. An excluded game has no user_games row,
+-- and if nobody else in any guild owns it there is no `games` row either -- so
+-- without the name here the checklist could not list back what was excluded.
+-- There is deliberately NO foreign key to games(appid) for the same reason.
+CREATE TABLE IF NOT EXISTS excluded_games (
+  user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  appid       INTEGER NOT NULL,
+  name        TEXT NOT NULL,
+  excluded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (user_id, appid)
+) STRICT, WITHOUT ROWID;
+
+-- NOTE: the `visible_user_games` view lives in migrate() in db/index.ts, NOT
+-- here. It references user_games.hidden, which is a migrated column, and this
+-- file runs BEFORE migrate().
+
+/* ====================================================================== *
+ * Reaction roles
+ *
+ * A SELF-CONTAINED feature. It shares the database file and nothing else:
+ * no foreign key into `users`, no reference to `eligible_members`, no
+ * playtime. Deliberately so -- `users.opted_in` is a record of consent to
+ * store Steam data, and handing someone a Discord role has nothing to do
+ * with that. A role panel must keep working for a member who has never
+ * touched /games and never will.
+ * ====================================================================== */
+
+CREATE TABLE IF NOT EXISTS role_panels (
+  message_id  TEXT PRIMARY KEY,
+  guild_id    TEXT NOT NULL,
+  channel_id  TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  -- 1 = picking one role in this panel drops the others in it.
+  exclusive   INTEGER NOT NULL DEFAULT 0,
+  created_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_role_panels_guild ON role_panels(guild_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reaction_roles (
+  message_id TEXT NOT NULL REFERENCES role_panels(message_id) ON DELETE CASCADE,
+  -- Custom emoji: the snowflake id. Unicode emoji: the character itself, with
+  -- the variation selector stripped, so U+2764 U+FE0F and bare U+2764 are the
+  -- same key. Gateway events and command input MUST be keyed identically.
+  emoji_key  TEXT NOT NULL,
+  -- What to render and what to react with: '⛏️' or '<:name:12345>'.
+  emoji_raw  TEXT NOT NULL,
+  role_id    TEXT NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (message_id, emoji_key)
+) STRICT, WITHOUT ROWID;
+
+-- One emoji per role per panel: two emoji granting the same role means the
+-- second removal takes away a role the first is still showing as held.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reaction_roles_role
+  ON reaction_roles(message_id, role_id);

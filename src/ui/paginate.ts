@@ -39,11 +39,11 @@ const COLLECTOR_TIME_MS = 14 * 60_000;
  * no playtime -- which is exactly what "All" promises to show.
  */
 export const FILTERS: ReadonlyArray<{ label: string; min: Minutes }> = [
-  { label: '30m+', min: 30 },
-  { label: '1h+', min: 60 },
-  { label: '5h+', min: 300 },
-  { label: '10h+', min: 600 },
-  { label: 'All', min: NO_FILTER },
+  { label: '30 min+', min: 30 },
+  { label: '1 h+', min: 60 },
+  { label: '5 h+', min: 300 },
+  { label: '10 h+', min: 600 },
+  { label: 'Kõik', min: NO_FILTER },
 ];
 
 /* -------------------------------------------------------------------------- */
@@ -306,8 +306,7 @@ export async function paginate<T>(opts: PaginateOptions<T>): Promise<void> {
         // interaction unacknowledged and Discord shows the clicker a failure.
         if (i.user.id !== s.ownerId) {
           await i.reply({
-            content:
-              "These buttons aren't for you — run the command yourself to get your own copy.",
+            content: 'Need nupud pole sinu omad — käivita käsk ise.',
             flags: MessageFlags.Ephemeral,
           });
           return;
@@ -359,7 +358,7 @@ export async function paginate<T>(opts: PaginateOptions<T>): Promise<void> {
         if (!i.replied && !i.deferred) {
           await i
             .reply({
-              content: 'Something broke handling that button. Try running the command again.',
+              content: 'Nupp ei töötanud. Proovi käsku uuesti.',
               flags: MessageFlags.Ephemeral,
             })
             .catch(() => {});

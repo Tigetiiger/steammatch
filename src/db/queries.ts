@@ -13,6 +13,14 @@
  *     predicates, so none of them can accidentally omit one. The single
  *     deliberate exception is listGames(), which shows a user their OWN library:
  *     hiding yourself from other people must not hide you from yourself.
+ *
+ *  3. ANYTHING THAT EXPOSES A GAME READS `visible_user_games`, NEVER
+ *     `user_games`. That view is to per-game visibility (/steam change) what
+ *     eligible_members is to per-user visibility: the single place the
+ *     `hidden = 0` predicate is written. The exceptions are the same in
+ *     spirit -- listGames() and userManualGames() show you your own rows, and
+ *     guildCatalog's "do I already have this" probe must see a hidden game so
+ *     the panel does not offer it back to you.
  */
 import type { Database, Statement } from 'better-sqlite3';
 import {
@@ -20,6 +28,7 @@ import {
   type GameRow,
   type LeaderRow,
   type MatchRow,
+  type ExcludedRow,
   type Minutes,
   type OwnerRow,
   type SharedRow,
@@ -57,7 +66,7 @@ const bit = (value: boolean): number => (value ? 1 : 0);
 
 const SQL_LIST_GAMES = `
   SELECT ug.appid AS appid, g.name AS name, ug.playtime_forever AS playtime,
-         ug.playtime_tracked AS tracked
+         ug.playtime_tracked AS tracked, ug.hidden AS hidden
   FROM user_games ug
   JOIN games g ON g.appid = ug.appid
   WHERE ug.user_id = ? AND (ug.playtime_tracked = 0 OR ug.playtime_forever > ?)
@@ -86,7 +95,7 @@ export function listGames(
   offset: number,
 ): GameRow[] {
   return (prep(db, SQL_LIST_GAMES).all(userId, minPlaytime, limit, offset) as RawGameRow[]).map(
-    (r) => ({ ...r, tracked: r.tracked === 1 }),
+    (r) => ({ ...r, tracked: r.tracked === 1, hidden: r.hidden === 1 }),
   );
 }
 
@@ -96,8 +105,8 @@ const SQL_SHARED_GAMES = `
          a.playtime_forever AS mine,
          b.playtime_forever AS theirs,
          MIN(a.playtime_tracked, b.playtime_tracked) AS tracked
-  FROM user_games a
-  JOIN user_games b ON b.appid = a.appid AND b.user_id = @other
+  FROM visible_user_games a
+  JOIN visible_user_games b ON b.appid = a.appid AND b.user_id = @other
   JOIN games g ON g.appid = a.appid
   WHERE a.user_id = @me
     AND (a.playtime_tracked = 0 OR a.playtime_forever > @min)
@@ -146,7 +155,7 @@ const SQL_WHO_OWNS = `
          sa.persona_name AS personaName,
          sa.added_by AS addedBy
   FROM eligible_members em
-  JOIN user_games ug ON ug.user_id = em.user_id AND ug.appid = @appid
+  JOIN visible_user_games ug ON ug.user_id = em.user_id AND ug.appid = @appid
   LEFT JOIN steam_accounts sa ON sa.user_id = em.user_id
   WHERE em.guild_id = @guild
     AND (ug.playtime_tracked = 0 OR ug.playtime_forever > @min)
@@ -183,14 +192,15 @@ const SQL_LEADERBOARD = `
          COUNT(*) AS owners,
          SUM(ug.playtime_forever) AS guildMinutes
   FROM eligible_members em
-  JOIN user_games ug ON ug.user_id = em.user_id
+  JOIN visible_user_games ug ON ug.user_id = em.user_id
   JOIN games g ON g.appid = ug.appid
   WHERE em.guild_id = @guild
     AND (ug.playtime_tracked = 0 OR ug.playtime_forever > @min)
     -- @mine is '' for the whole-guild board, or a user id to restrict the board
     -- to games that user has: "how many people here share MY games".
+    -- Also the view: a game you hid does not belong on a board you publish.
     AND (@mine = '' OR EXISTS (
-      SELECT 1 FROM user_games mine
+      SELECT 1 FROM visible_user_games mine
       WHERE mine.user_id = @mine AND mine.appid = ug.appid
     ))
   GROUP BY ug.appid, g.name
@@ -238,13 +248,13 @@ export const MIN_OVERLAP_FOR_MATCH = 3;
 
 const SQL_FIND_MATCHES = `
   WITH mine AS (
-    SELECT appid FROM user_games
+    SELECT appid FROM visible_user_games
     WHERE user_id = @me AND (playtime_tracked = 0 OR playtime_forever > @min)
   ),
   theirs AS (
     SELECT em.user_id AS uid, ug.appid AS appid
     FROM eligible_members em
-    JOIN user_games ug ON ug.user_id = em.user_id
+    JOIN visible_user_games ug ON ug.user_id = em.user_id
     WHERE em.guild_id = @guild
       AND em.user_id <> @me
       AND (ug.playtime_tracked = 0 OR ug.playtime_forever > @min)
@@ -341,7 +351,7 @@ export function foldForSearch(input: string): string {
 const SQL_AUTOCOMPLETE_SEARCH = `
   SELECT g.appid AS appid, g.name AS name, COUNT(*) AS owners
   FROM games g
-  JOIN user_games ug ON ug.appid = g.appid
+  JOIN visible_user_games ug ON ug.appid = g.appid
   JOIN eligible_members em ON em.user_id = ug.user_id AND em.guild_id = @guild
   WHERE g.name_folded LIKE @pattern ESCAPE '\\'
   GROUP BY g.appid, g.name
@@ -352,7 +362,7 @@ const SQL_AUTOCOMPLETE_SEARCH = `
 const SQL_AUTOCOMPLETE_TOP = `
   SELECT g.appid AS appid, g.name AS name, COUNT(*) AS owners
   FROM games g
-  JOIN user_games ug ON ug.appid = g.appid
+  JOIN visible_user_games ug ON ug.appid = g.appid
   JOIN eligible_members em ON em.user_id = ug.user_id AND em.guild_id = @guild
   GROUP BY g.appid, g.name
   ORDER BY owners DESC, g.name ASC
@@ -518,6 +528,9 @@ export function linkSteam(
       prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
       // The library belonged to the OLD steam account. It must not survive.
       prep(db, SQL_DELETE_USER_GAMES).run(userId);
+      // Neither must its exclusions: appids are per-account, so keeping them
+      // would silently suppress unrelated games in the NEW account's library.
+      prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
     }
     prep(db, SQL_INSERT_STEAM).run(id64, userId, addedBy);
     return { ok: true, wiped: current !== undefined };
@@ -529,6 +542,8 @@ export function unlink(db: Database, userId: string): void {
   inTransaction(db, () => {
     prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
     prep(db, SQL_DELETE_USER_GAMES).run(userId);
+    // The import checklist's answers were about this account's library.
+    prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
   });
 }
 
@@ -546,6 +561,7 @@ export function forget(db: Database, userId: string): void {
   inTransaction(db, () => {
     prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
     prep(db, SQL_DELETE_USER_GAMES).run(userId);
+    prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
     prep(db, SQL_DELETE_GUILD_MEMBERSHIPS).run(userId);
     prep(db, SQL_SOFT_DELETE_USER).run(userId);
   });
@@ -560,45 +576,120 @@ export function getGuildMinPlaytime(db: Database, guildId: string): Minutes {
 }
 
 /** SQLite has no boolean type, so `tracked` arrives as 0/1 and is mapped. */
-type RawGameRow = Omit<GameRow, 'tracked'> & { tracked: number };
+type RawGameRow = Omit<GameRow, 'tracked' | 'hidden'> & { tracked: number; hidden: number };
 type RawSharedRow = Omit<SharedRow, 'tracked'> & { tracked: number };
 
 /* ------------------------------------------------------------------ *
- * Background refresh
+ * Import checklist: excluded games
+ *
+ * After a Steam sync the user is shown every game and unchecks the ones they
+ * do not want stored. The unchecked appids land here, and syncLibrary reads
+ * this table ITSELF rather than accepting a filter from its caller -- so a
+ * later /steam update cannot quietly re-import something the user removed.
  * ------------------------------------------------------------------ */
 
-const SQL_DUE_FOR_REFRESH = `
-  SELECT sa.user_id AS userId, sa.steam_id64 AS id64
-  FROM steam_accounts sa
-  JOIN users u ON u.user_id = sa.user_id
-  WHERE u.opted_in = 1
-    AND u.deleted_at IS NULL
-    AND (sa.stale_after IS NULL OR sa.stale_after <= @now)
-    AND EXISTS (SELECT 1 FROM guild_members gm WHERE gm.user_id = sa.user_id)
-  ORDER BY COALESCE(sa.stale_after, 0) ASC
-  LIMIT @limit
+const SQL_GET_EXCLUDED = `SELECT appid FROM excluded_games WHERE user_id = ?`;
+const SQL_LIST_EXCLUDED = `
+  SELECT appid, name FROM excluded_games WHERE user_id = ? ORDER BY name ASC
+`;
+const SQL_CLEAR_EXCLUDED = `DELETE FROM excluded_games WHERE user_id = ?`;
+const SQL_INSERT_EXCLUDED = `
+  INSERT INTO excluded_games (user_id, appid, name) VALUES (@user, @appid, @name)
+  ON CONFLICT(user_id, appid) DO UPDATE SET name = excluded.name
+`;
+const SQL_DELETE_EXCLUDED_GAMES = `DELETE FROM excluded_games WHERE user_id = ?`;
+
+/** The appids this user has excluded. A Set because sync tests membership per game. */
+export function getExcludedAppids(db: Database, userId: string): Set<number> {
+  const rows = prep(db, SQL_GET_EXCLUDED).all(userId) as { appid: number }[];
+  return new Set(rows.map((r) => r.appid));
+}
+
+/** Excluded games with their names, so the checklist can offer them back. */
+export function listExcludedGames(db: Database, userId: string): ExcludedRow[] {
+  return prep(db, SQL_LIST_EXCLUDED).all(userId) as ExcludedRow[];
+}
+
+/**
+ * Replace the user's whole exclusion set in one transaction.
+ *
+ * A wholesale replace, not a merge: the checklist always submits the complete
+ * answer for the library it was built from, and merging would make a re-check
+ * ("actually, do import this one") impossible to express.
+ *
+ * Deleting the row from user_games here is what makes unchecking an ALREADY
+ * IMPORTED game take effect immediately, instead of only at the next sync.
+ */
+export function setExcludedGames(
+  db: Database,
+  userId: string,
+  games: readonly ExcludedRow[],
+): void {
+  inTransaction(db, () => {
+    prep(db, SQL_CLEAR_EXCLUDED).run(userId);
+    const insert = prep(db, SQL_INSERT_EXCLUDED);
+    const drop = prep(db, SQL_REMOVE_USER_GAME);
+    for (const g of games) {
+      if (!Number.isInteger(g.appid)) continue;
+      const name = sanitizeName(g.name) || `App ${g.appid}`;
+      insert.run({ user: userId, appid: g.appid, name });
+      drop.run(userId, g.appid);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Per-game visibility (/steam change)
+ *
+ * `hidden` is NOT `excluded`. A hidden game is still yours -- it stays in
+ * user_games, still shows in your own /games list, and still counts as
+ * something you own -- it is simply withheld from every guild-facing query by
+ * the visible_user_games view. An excluded game was never stored at all.
+ * ------------------------------------------------------------------ */
+
+const SQL_LIST_ALL_USER_GAMES = `
+  SELECT ug.appid AS appid, g.name AS name, ug.playtime_forever AS playtime,
+         ug.playtime_tracked AS tracked, ug.hidden AS hidden
+  FROM user_games ug
+  JOIN games g ON g.appid = ug.appid
+  WHERE ug.user_id = ?
+  ORDER BY ug.playtime_tracked DESC, ug.playtime_forever DESC, g.name ASC
+  LIMIT ?
 `;
 
 /**
- * Accounts whose cached library has gone stale.
- *
- * Only users who opted in and are still a member of at least one guild are
- * returned: the Steam API terms allow retrieving a user's data because that
- * user asked us to, which is not a licence to keep polling for someone who has
- * left or deleted their data.
- *
- * `stale_after` already encodes the backoff, so a failing or private account
- * simply does not come due until its penalty expires.
+ * Every game the user has, hidden ones included, for the /steam change
+ * checklist. Deliberately NOT filtered by playtime: you must be able to hide a
+ * game that no threshold would have shown you.
  */
-export function dueForRefresh(
+export function listAllUserGames(db: Database, userId: string, limit = 5000): GameRow[] {
+  return (prep(db, SQL_LIST_ALL_USER_GAMES).all(userId, limit) as RawGameRow[]).map((r) => ({
+    ...r,
+    tracked: r.tracked === 1,
+    hidden: r.hidden === 1,
+  }));
+}
+
+const SQL_UNHIDE_ALL = `UPDATE user_games SET hidden = 0 WHERE user_id = ?`;
+const SQL_HIDE_ONE = `UPDATE user_games SET hidden = 1 WHERE user_id = ? AND appid = ?`;
+
+/**
+ * Replace the user's whole hidden set, like setExcludedGames and for the same
+ * reason: the checklist submits a complete answer, so anything not named is
+ * visible. Unhide-everything then hide-the-named keeps that atomic.
+ */
+export function setHiddenGames(
   db: Database,
-  limit: number,
-  now: number = Math.floor(Date.now() / 1000),
-): { userId: string; id64: string }[] {
-  return prep(db, SQL_DUE_FOR_REFRESH).all({ now, limit }) as {
-    userId: string;
-    id64: string;
-  }[];
+  userId: string,
+  hiddenAppids: readonly number[],
+): void {
+  inTransaction(db, () => {
+    prep(db, SQL_UNHIDE_ALL).run(userId);
+    const hide = prep(db, SQL_HIDE_ONE);
+    for (const appid of hiddenAppids) {
+      if (Number.isInteger(appid)) hide.run(userId, appid);
+    }
+  });
 }
 
 /**
@@ -695,9 +786,11 @@ const SQL_GUILD_CATALOG = `
          g.source AS source,
          COUNT(*) AS owners
   FROM eligible_members em
-  JOIN user_games ug ON ug.user_id = em.user_id
+  JOIN visible_user_games ug ON ug.user_id = em.user_id
   JOIN games g ON g.appid = ug.appid
   WHERE em.guild_id = @guild
+    -- Raw user_games, NOT the view: this asks "do I already have this", and a
+    -- game I own but have hidden must not be offered back to me as new.
     AND NOT EXISTS (
       SELECT 1 FROM user_games mine
       WHERE mine.user_id = @me AND mine.appid = g.appid

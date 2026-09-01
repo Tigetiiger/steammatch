@@ -2,9 +2,23 @@
 
 A Discord bot for finding people in your server who own — and actually play — the same games you do.
 
-Members link a Steam profile, the bot imports their purchased games with playtime, and keeps
-the ones with **more than 30 minutes** played. Everyone can then ask who else plays a game,
-what they share with a specific person, and who their closest match in the server is.
+**The bot speaks Estonian.** Every string a user sees — embeds, buttons, modals, command
+descriptions, autocomplete, error messages — is Estonian; the code, its comments and this
+README are English. Command *names* stay English (`/games`, `/steam update`) so they match the
+docs and do not churn. Steam's own setting names ("Game details", "Always keep my total
+playtime private") are deliberately left in English inside the fix-it instructions, because
+that is the label the user has to find in the Steam UI.
+
+Numbers are formatted for `et-EE`: decimal comma (`1,5 h`), space-grouped thousands
+(`12 345 h`, and four-digit numbers ungrouped, which is correct Estonian).
+
+Members link a Steam profile, **pick from a checklist which of their games get stored at
+all**, and the bot keeps the ones with **more than 30 minutes** played. Everyone can then ask
+who else plays a game, what they share with a specific person, and who their closest match in
+the server is.
+
+Steam is contacted only when a person asks: once at import, and thereafter only when they run
+`/steam update`. Nothing refreshes in the background.
 
 ## Setup
 
@@ -42,14 +56,18 @@ global commands are eventually consistent. Leave it unset to deploy globally.
 | Command | What it does |
 |---|---|
 | `/games add [user]` | **The panel.** Sync a Steam library, claim games other people here already added, add any other game, or quick-add Minecraft. `user` does it **for someone else** (needs Manage Server) |
+| `/steam update` | Re-read the profile and go through the import checklist again (15-minute cooldown) |
+| `/steam change` | Checklist of your games — untick the ones other people should not see |
 | `/steam unlink` | Delete the Steam link and all stored playtime |
-| `/steam refresh` | Force a re-import (15-minute cooldown) |
+
+All user-facing copy lives in `src/ui/embeds.ts`; that is the file to open to change wording.
 | `/games list [min_playtime] [public]` | Your library, filterable and paginated |
 | `/games shared <user> [min_playtime]` | What you and one other person both play |
 | `/games who <game> [min_playtime]` | Who else in this server plays it |
 | `/games leaderboard [mine] [min_playtime]` | The server's most commonly owned games. `mine: true` ranks **your** games by how many people here share them |
 | `/match [min_playtime] [sort]` | Members ranked by overlap with you |
 | `/privacy` | Hide yourself, or delete everything |
+| `/roles …` | **Unrelated to games.** Self-service reaction roles — see below |
 
 The Steam sync in the panel accepts any of: a profile URL (`steamcommunity.com/id/name`
 or `/profiles/7656…`), a raw 17-digit SteamID64, `[U:1:12345]`, or `STEAM_0:1:12345`.
@@ -75,10 +93,83 @@ playtime filter instead of being hidden by one. In the schema that is
 To add another quick-add button, append to `QUICK_ADD_GAMES` in
 `src/commands/add-panel.ts` — that list is the whole feature.
 
+## Choosing what gets stored, and who sees it
+
+Two separate decisions, deliberately kept apart:
+
+**The import checklist** runs after every Steam read and before anything is written. It lists
+every game Steam returned, most-played first, 25 to a page, all ticked. Untick a game and it
+is **never written to the database at all** — not the playtime, not the row. The unticked
+appids are kept in `excluded_games`, and `syncLibrary` reads that table *itself* rather than
+taking a filter from its caller, so a future call site cannot silently re-import something the
+user removed. Unticking a game that was already imported deletes the existing row immediately.
+Backing out of the checklist writes nothing, including on a first link — the Steam identity is
+claimed only after the user has said yes to a concrete list.
+
+**`/steam change`** is the same widget asking a different question: ticked means *other people
+in this server can see this game*. An unticked game is still yours — it stays in your
+`/games list`, marked 🔒 — but it is dropped from `/match`, `/games who`, `/games shared`, both
+leaderboards and autocomplete. That is enforced by the `visible_user_games` view, which is to
+per-game visibility what `eligible_members` is to per-user visibility: the one place the
+`hidden = 0` predicate is written, so no query can forget it.
+
+Hidden ≠ excluded. A hidden game is stored and withheld; an excluded game was never stored.
+
+## No background refresh
+
+The bot has no scheduler. It reads a Steam profile when someone links it and when someone runs
+`/steam update` (15-minute cooldown, shortened to 1 minute after a failure so a Steam outage is
+not punished for a full quarter of an hour). This is stricter than the Steam API Terms require
+— they allow fetching a user's data "as requested by the end user" — and it means the numbers
+you see are as fresh as the last time somebody asked for them, not fresher.
+
+## Reaction roles (`/roles`)
+
+A **separate feature that happens to live in the same bot.** It shares the database file, the
+embed helpers and nothing else: no opt-in, no consent record, no `eligible_members`, no
+playtime, no foreign key into `users`. A role panel works for a member who has never touched
+`/games` and never will. Code lives in `src/roles/`; `src/db/queries.ts` stays Steam-only.
+
+```
+/roles panel <title> [description] [exclusive]   post a panel here
+/roles add <role> <emoji> [message]              bind, and react on the panel
+/roles remove <role> [message]                   unbind, and clear the reaction
+/roles list                                      every panel in this server
+/roles delete [message]                          stop a panel handing out roles
+```
+
+`message` defaults to the newest panel in the guild, and takes an id or a message link.
+`exclusive` makes a panel a pick-one: taking a role drops the others in that panel, in a
+single `roles.set()` so two can never be held at once.
+
+**Intents.** This adds `GuildMessageReactions`. It is **not privileged** — nothing to enable
+in the Developer Portal — but it does end the bot's Guilds-only stance, and it forces
+`partials: [Message, Reaction, User]`. A reaction on a message the bot has not cached since it
+started arrives with only an id, and that is *every* message written before the last restart.
+Omit the partials and panels work in testing and die on the first deploy.
+
+**Which roles may be offered** (`src/roles/guard.ts`). A reaction role is taken by whoever
+clicks it, with nobody vetting them, so the bar is higher than "may this moderator assign it":
+
+- never `@everyone`, never a managed (bot/booster/integration) role — the API refuses both;
+- never a role carrying a moderator permission (Administrator, Manage*, Ban/Kick/Moderate
+  Members, Mention Everyone), for anyone, including the guild owner;
+- never at or above the **bot's** highest role — it could not assign it anyway;
+- never at or above the **invoking moderator's** highest role, unless they own the guild.
+  Without that last rule, Manage Roles becomes a way to climb the hierarchy: build a panel
+  granting a role you cannot assign by hand, then click it yourself.
+
+The hierarchy check runs again at grant time, because roles get dragged around in the server
+settings long after a panel is built, and the bot losing its position is the most common way a
+working panel stops working.
+
 ## Privacy model
 
-- **Opt-in.** Nothing is stored until the user explicitly agrees at a consent prompt.
-- **Adding someone else** (`/steam link ... user:@them`) is the one exception, and is
+- **Opt-in, per game.** Nothing is written until the user has seen the import checklist and
+  pressed **Import checked** — closing it stores nothing and claims no Steam link.
+  (`consentEmbed`/`askConsent` in `src/commands/steam.ts` are a separate, older prompt that
+  is **not currently wired to any call site**; the checklist is what actually gates writes.)
+- **Adding someone else** (`/games add user:@them`) is the one exception, and is
   gated on the **Manage Server** permission — without that gate any member could
   attach any Steam account to any other member. The person added has not consented,
   so the link records who added them, every listing marks the entry `✎ added by a
@@ -88,10 +179,11 @@ To add another quick-add button, append to `QUICK_ADD_GAMES` in
   where the command runs. All public queries go through the `eligible_members` SQL view,
   which encodes opted-in + discoverable + visible-here + not-deleted in one place so that
   no query can accidentally omit the filter.
-- **Two hide levels.** Globally undiscoverable, or hidden in one specific server. Your own
-  `/games list` keeps working either way.
-- `/unlink` removes the link and all playtime; `/privacy → forget me` also drops guild
-  membership rows.
+- **Three hide levels.** Globally undiscoverable (`/privacy`), hidden in one specific server
+  (`/privacy`), or hidden game-by-game (`/steam change`). Your own `/games list` keeps working
+  in all three cases.
+- `/steam unlink` removes the link, all playtime and the exclusion list; `/privacy → forget me`
+  also drops guild membership rows.
 - A raw SteamID64 is never shown in server-visible output.
 
 **Known limitation:** anyone can type anyone else's public Steam ID. Real ownership proof
@@ -122,6 +214,9 @@ for 24. Refreshes are demand-driven — the bot never background-crawls a guild,
 Steam API Terms require ("you will only retrieve Steam Data about a Steam end user as
 requested by the end user").
 
+See [DECISIONS.md](DECISIONS.md) for why the non-obvious choices were made, and what
+was given up for each.
+
 ## Development
 
 ```bash
@@ -130,8 +225,11 @@ npm run typecheck # tsc --noEmit
 ```
 
 `prototype/ui.html` is the signed-off UI design — a self-contained mockup of every bot
-screen. Open it in a browser. The embed builders in `src/ui/embeds.ts` mirror it; change
-the prototype first when you want to change the output.
+screen. Open it in a browser. It is kept in **English** and describes layout, hierarchy and
+which numbers belong on which screen; the Estonian wording lives in `src/ui/embeds.ts`. It
+also predates the import checklist and `/steam change`, so those two screens are not in it
+yet. Change the prototype first when you want to change a screen's *shape*; change
+`embeds.ts` when you want to change its *words*.
 
 ### Layout
 
@@ -142,14 +240,18 @@ src/
   steam/          resolve.ts (any ID format -> SteamID64), client.ts (API + rate limit),
                   sync.ts (library -> DB transaction)
   db/             schema.sql, index.ts (open/migrate), queries.ts (all SQL)
-  steam/refresher.ts  background job that re-syncs stale libraries
-  ui/             embeds.ts (every user-facing string), paginate.ts (session store)
+  roles/          the reaction-role feature, self-contained: emoji.ts (emoji
+                  identity), store.ts (its own SQL), guard.ts (which roles may
+                  be offered), handler.ts (reaction -> role)
+  ui/             embeds.ts (every user-facing string), paginate.ts (session store),
+                  checklist.ts (the paginated multi-select used by both the import
+                  checklist and /steam change)
   commands/       one file per command, plus add-panel.ts (the /games add UI),
                   registry.ts (the command list) and user-state.ts (per-process
                   consent + refresh cooldown)
-test/             steam, sync, queries, embeds, paginate, text, refresher,
-                  security, on-behalf, manual-games, and end-to-end
-                  integration — 256 tests
+test/             steam, sync, queries, embeds, paginate, text, security,
+                  on-behalf, manual-games, curation, roles, and end-to-end
+                  integration — 305 tests
 ```
 
 ### Things that will bite you if you forget them
@@ -184,6 +286,32 @@ test/             steam, sync, queries, embeds, paginate, text, refresher,
 - **Manual games have no playtime and must never be filtered out.** Anything that
   filters on `playtime_forever` needs the `playtime_tracked = 0 OR ...` escape, and
   a Steam sync's delete must be scoped to `playtime_tracked = 1` or it wipes them.
+- **Anything guild-facing reads `visible_user_games`, never `user_games`.** The two
+  deliberate exceptions both show a user their own rows (`listGames`,
+  `userManualGames`) plus `guildCatalog`'s "do I already have this" probe, which
+  must see a hidden game so the panel does not offer it back.
+- **A manual game's appid is NEGATIVE, so `^\d+$` is never the right test for one.**
+  Autocomplete hands `/games who` the appid as the option value; a digits-only
+  predicate rejected `-1`, fell through to a name search for the literal text
+  `-1`, and told the user nobody owned the game it had just suggested. Anything
+  that parses or renders an appid needs `-?`, and anything that builds a Steam
+  URL from one needs an `appid > 0` guard — `store.steampowered.com/app/-1` is a
+  404 wearing the game's own name.
+- **A reaction's emoji and a typed emoji must produce the same key.** Custom
+  emoji arrive as `{id, name}` from the gateway but as `<:name:id>` text from a
+  command option, and unicode emoji carry an optional variation selector
+  (U+FE0F) that Discord's picker adds and keyboards do not — so `❤️` and `❤`
+  are one emoji with two byte sequences. Both sides call `emojiKey()`.
+- **Validate an emoji BEFORE stripping the variation selector, not after.**
+  `\p{RGI_Emoji}` only accepts a text-default character like U+26CF (⛏️) when it
+  carries the selector, so testing the stripped form rejects perfectly ordinary
+  emoji while accepting `🚀`. A test covers exactly this.
+- **An excluded game is not staged in `_sync_appids`.** That is what makes the
+  sync delete a game the user unticked after it had already been imported. Add it
+  to the staging table and unticking silently stops working on existing rows.
+- **Exclusions are appids, so they are meaningless across accounts.** Relinking to
+  a different SteamID64 must drop them in the same transaction that wipes
+  `user_games`, or unrelated games in the new library are suppressed forever.
 - **Anything in `schema.sql` that references a migrated column breaks old databases.**
   `schema.sql` runs *before* `migrate()`, so an index on `games.source` belongs in
   `migrate()`, not the schema file. A test covers exactly this.

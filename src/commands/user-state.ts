@@ -8,7 +8,7 @@
 
 /** Consent is re-asked after this long anyway, so entries need not live forever. */
 const CONSENT_TTL_MS = 24 * 60 * 60_000;
-/** Manual /steam refresh cooldown. */
+/** Cooldown between /steam update runs. */
 export const REFRESH_COOLDOWN_MS = 15 * 60_000;
 
 const consentedAt = new Map<string, number>();
@@ -35,9 +35,9 @@ export function recordConsent(userId: string): void {
  */
 export function clearConsent(userId: string): void {
   consentedAt.delete(userId);
-  // Deliberately does NOT clear the refresh cooldown. Doing so made the
+  // Deliberately does NOT clear the update cooldown. Doing so made the
   // 15-minute limit bypassable with unlink -> link, or by looping /steam
-  // refresh on a profile that always fails.
+  // update on a profile that always fails.
 }
 
 /** Milliseconds remaining on the refresh cooldown, or 0 when ready. */
@@ -55,7 +55,7 @@ export function clearRefreshMark(userId: string): void {
 }
 
 /**
- * Shorten the cooldown after a failed refresh instead of removing it. The user
+ * Shorten the cooldown after a failed update instead of removing it. The user
  * should not be punished a full 15 minutes for a Steam outage, but an
  * always-failing profile must not become an unlimited retry loop either.
  */
