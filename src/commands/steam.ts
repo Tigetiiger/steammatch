@@ -6,7 +6,9 @@
  * background crawl -- see "No background refresh" in the README.
  *
  * Every path that writes a library goes through `reviewAndSync`, so the
- * checklist can never be skipped by adding a new caller.
+ * checklist can never be skipped by adding a new caller. The list the user
+ * ticks is the ONLY thing written -- nothing is stored about what they left
+ * unticked, and /steam update pre-ticks exactly what is already in the library.
  */
 
 import { ComponentType, MessageFlags, SlashCommandBuilder } from 'discord.js';
@@ -17,11 +19,10 @@ import { resolveToId64 } from '../steam/resolve.js';
 import { syncLibrary, type LibrarySource } from '../steam/sync.js';
 import {
   ensureUser,
-  getExcludedAppids,
   linkSteam,
   listAllUserGames,
   listGames,
-  setExcludedGames,
+  steamAppids,
   setHiddenGames,
   setOptedIn,
   touchGuildMember,
@@ -34,6 +35,7 @@ import {
   fmtMinutes,
   linkSuccessEmbed,
   noticeEmbed,
+  num,
   profileStateEmbed,
   profileStateMessage,
   retryRow,
@@ -134,9 +136,10 @@ const NOT_IMPORTED = noticeEmbed(
 /**
  * The one place a Steam library is ever written to the database.
  *
- * Shows the checklist over `lib.games`, persists the unchecked ones as
- * exclusions, then syncs. Returns null when the user backed out, in which case
- * NOTHING has been written -- the caller must not treat that as a success.
+ * Shows the checklist over `lib.games`, then syncs the TICKED ones as if they
+ * were the whole library. Nothing is written about the unticked ones. Returns
+ * null when the user backed out, in which case NOTHING has been written -- the
+ * caller must not treat that as a success.
  */
 async function reviewAndSync(
   interaction: RepliableInteraction,
@@ -145,8 +148,15 @@ async function reviewAndSync(
   id64: string,
   lib: LibraryResult,
   min: Minutes,
-  /** Exclusions to pre-tick. Empty for a library that is not this account's. */
-  alreadyExcluded: ReadonlySet<number>,
+  /**
+   * The Steam appids already stored for this user, or null for a first import.
+   *
+   * Null ticks everything: a first import with nothing ticked would be a wall
+   * of empty boxes and no library at the end of it. A SET ticks only what is
+   * already there, which leaves every new game unticked -- including a game the
+   * user declined last time, since nothing is stored about a refusal any more.
+   */
+  known: ReadonlySet<number> | null,
   /**
    * Run after the user saves and before anything is written. This is where the
    * first import claims the Steam identity: taking the claim any earlier would
@@ -157,6 +167,8 @@ async function reviewAndSync(
   accept: () => boolean = () => true,
 ): Promise<{ kept: OwnedGame[]; excludedCount: number } | null> {
   const games = [...lib.games].sort(byPlaytimeDesc);
+  const preTicked = games.filter((g) => known === null || known.has(g.appid));
+  const newCount = games.length - preTicked.length;
 
   const review = await runChecklist({
     interaction,
@@ -168,10 +180,13 @@ async function reviewAndSync(
       // unknown. Say nothing rather than print a misleading "0m played".
       ...(g.playtimeForever > 0 ? { note: `mängitud ${fmtMinutes(g.playtimeForever)}` } : {}),
     })),
-    initial: games.filter((g) => !alreadyExcluded.has(g.appid)).map((g) => String(g.appid)),
+    initial: preTicked.map((g) => String(g.appid)),
     title: 'Vali, mida importida',
     intro:
-      'Eemalda linnuke mängudelt, mida sa ei taha salvestada. Neid ei salvestata ja need jäävad valimata ka järgmisel **/steam update** korral.',
+      'Eemalda linnuke mängudelt, mida sa ei taha salvestada. Salvestan ainult märgitud mängud.' +
+      (newCount > 0
+        ? `\n\n**${num(newCount)} uut mängu on valimata.** Märgi need, mida soovid lisada — juba salvestatud mängud on ette märgitud.`
+        : ''),
     checkedMeans: 'salvestatakse',
     uncheckedMeans: 'ei salvestata',
     saveLabel: 'Impordi valitud',
@@ -184,15 +199,15 @@ async function reviewAndSync(
   const kept = games.filter((g) => keptIds.has(String(g.appid)));
   const dropped = games.filter((g) => !keptIds.has(String(g.appid)));
 
-  // Exclusions first: syncLibrary reads that table itself, so writing them
-  // before the sync is what makes even the very first import honour the list.
-  setExcludedGames(
-    ctx.db,
-    userId,
-    dropped.map((g) => ({ appid: g.appid, name: g.name })),
-  );
+  // The curated list IS the filter. syncLibrary writes what it is handed and
+  // deletes every other Steam-sourced row, so an unticked game is never written
+  // and an unticked game that was imported before is removed. Nothing is stored
+  // about the refusal; next time the game simply arrives unticked because the
+  // user does not own it here.
   try {
-    await syncLibrary(ctx.db, userId, id64, cachedSource(lib));
+    await syncLibrary(ctx.db, userId, id64, cachedSource({ ...lib, games: kept }), undefined, {
+      curated: true,
+    });
   } catch (err) {
     console.error('[steam] syncLibrary failed', err);
   }
@@ -291,10 +306,10 @@ export async function importLibrary(
   // database exactly as it was. Doing it after would mean a cancel had already
   // created the link -- and, on a relink, already wiped the old library.
   const existing = getLinkInfo(ctx.db, userId);
-  // Exclusions are appids, which only mean anything relative to the account
-  // they came from. Re-pointing at a different Steam account starts clean.
-  const alreadyExcluded =
-    existing?.id64 === id64 ? getExcludedAppids(ctx.db, userId) : new Set<number>();
+  // Appids only mean anything relative to the account they came from, so
+  // re-pointing at a DIFFERENT Steam account is a first import: tick everything.
+  // Re-running this on the same account is an update, and behaves like one.
+  const known = existing?.id64 === id64 ? steamAppids(ctx.db, userId) : null;
 
   if (lib.games.length > 0) {
     let claimFailed = false;
@@ -305,7 +320,7 @@ export async function importLibrary(
       id64,
       lib,
       min,
-      alreadyExcluded,
+      known,
       () => {
         if (claimLink(ctx, userId, id64, addedBy)) return true;
         claimFailed = true;
@@ -520,7 +535,7 @@ async function updateSub(
     link.id64,
     lib,
     min,
-    getExcludedAppids(ctx.db, userId),
+    steamAppids(ctx.db, userId),
   );
   if (result === null) {
     await interaction.editReply({

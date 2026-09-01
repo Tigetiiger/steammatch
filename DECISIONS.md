@@ -9,28 +9,40 @@ look for it here first.
 
 ---
 
-## 1. The import checklist gates every write, and `syncLibrary` enforces it itself
+## 1. Nothing is stored about a refusal; the ticked list *is* the filter
 
-**Context.** Users wanted to keep games out of the database entirely, not merely
-hide them.
+**Was.** Unticked appids went to an `excluded_games` table, and `syncLibrary()`
+read that table itself so no call site could forget to apply it.
 
-**Decision.** Unticked appids go to an `excluded_games` table, and
-`syncLibrary()` reads that table itself rather than accepting a filter argument
-from its caller.
+**Decision.** The table is gone and `migrate()` drops it, rows and all.
+`reviewAndSync()` hands `syncLibrary()` a library containing **only the ticked
+games**, and sync writes what it is given and deletes every other Steam-sourced
+row. An unticked game is never written; an unticked game that was imported
+before is deleted because it is absent from the list.
 
-**Why.** A filter parameter is a rule every future call site has to remember.
-There are already three paths that write a library (first link, `/steam update`,
-and whatever comes next), and the one that forgets the filter would silently
-re-import data a user explicitly refused. Same reasoning as the
-`eligible_members` view: put the predicate where it cannot be omitted.
+**Why this is still safe from the failure the old design guarded against.** That
+guard existed because a *filter parameter* is a rule every future call site has
+to remember, and the one that forgets silently re-imports refused data. There is
+no filter parameter here either: the data itself is the filter, and there is
+nothing to forget because there is nothing left to consult.
 
-**Gave up.** `steam/sync.ts` now imports from `db/queries.ts`, so the sync layer
-is no longer ignorant of the query layer. Acceptable — there is no cycle, and
-the alternative is a rule enforced by memory.
+**What replaces the memory.** `/steam update` pre-ticks exactly the appids
+already in the library (`steamAppids()`), so a game you declined arrives
+unticked next time — because you do not own it here, not because anything was
+recorded. The screen says so: *"N uut mängu on valimata."*
 
-**Consequence.** Excluded games are also not staged in `_sync_appids`, which is
-what makes unticking an *already imported* game delete its row. If you ever add
-them to the staging table, unticking silently stops working on existing rows.
+**Gave up.** A declined game is now indistinguishable from a game Steam only
+just started reporting. Both are "new", both arrive unticked. Requested, and the
+honest trade for storing nothing.
+
+**Also gave up.** The ability to list back what was excluded — that was the only
+reason `excluded_games.name` was denormalised.
+
+**One knock-on.** An empty list needed a meaning. Empty from Steam is a
+suspected glitch and is ignored (a malformed response once wiped a real
+library); empty from the checklist is a deliberate "store nothing". So
+`syncLibrary` takes `{ curated: true }`, which does nothing except tell those
+two cases apart.
 
 ---
 
@@ -53,10 +65,10 @@ straight-line code.
 
 ## 3. "Excluded" and "hidden" are two different things, deliberately
 
-| | Excluded | Hidden |
+| | Not ticked | Hidden |
 |---|---|---|
 | Set by | the import checklist | `/steam change` |
-| Stored? | no row at all | row exists |
+| Stored? | no row at all, and no record of the refusal | row exists |
 | Your own `/games list` | absent | present, marked 🔒 |
 | Everyone else | absent | absent |
 

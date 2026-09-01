@@ -191,12 +191,6 @@ export function getPrivacyState(
   };
 }
 
-export function getGameMeta(db: Db, appid: number): { name: string; iconHash: string } | null {
-  const row = readRow(db, 'SELECT name, icon_hash FROM games WHERE appid = ?', appid);
-  const name = row ? asString(row['name']) : null;
-  if (!name) return null;
-  return { name, iconHash: (row && asString(row['icon_hash'])) ?? '' };
-}
 
 export function getGuildStats(db: Db, guildId: string): { members: number; distinctGames: number } {
   const m = readRow(db, 'SELECT COUNT(*) AS c FROM eligible_members WHERE guild_id = ?', guildId);

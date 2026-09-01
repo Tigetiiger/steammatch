@@ -198,6 +198,33 @@ describe('the /games list threshold buttons', () => {
   });
 });
 
+describe('a hand-added game shows no Steam name', () => {
+  it('omits the persona on /games who, even for a linked user', async () => {
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+    db.prepare('UPDATE steam_accounts SET persona_name = ? WHERE user_id = ?').run('tigetiger', A);
+
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+
+    // The Steam game still names the account it came from...
+    expect(whoOwns(db, G, 10, -1, 25)[0]?.personaName).toBe('tigetiger');
+    // ...the hand-added one does not. It never came from Steam, and the person
+    // listed might not have a Steam account at all.
+    expect(whoOwns(db, G, mc, -1, 25)[0]?.personaName).toBeNull();
+  });
+
+  it('still lists the person, and still marks a moderator-added entry', async () => {
+    linkSteam(db, B, '76561198000000002', 'U_mod');
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, B, mc);
+
+    const row = whoOwns(db, G, mc, -1, 25)[0]!;
+    expect(row.userId).toBe(B);
+    expect(row.addedBy).toBe('U_mod');
+  });
+});
+
 describe('unlinking Steam keeps hand-added games', () => {
   it('/steam unlink drops the Steam library but not the manual one', async () => {
     const mc = upsertManualGame(db, 'Minecraft').appid;

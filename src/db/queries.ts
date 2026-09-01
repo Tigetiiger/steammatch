@@ -28,7 +28,6 @@ import {
   type GameRow,
   type LeaderRow,
   type MatchRow,
-  type ExcludedRow,
   type Minutes,
   type OwnerRow,
   type SharedRow,
@@ -152,7 +151,12 @@ export function sharedGames(
 const SQL_WHO_OWNS = `
   SELECT em.user_id AS userId,
          ug.playtime_forever AS playtime,
-         sa.persona_name AS personaName,
+         -- Only for a real Steam app. A negative appid is a hand-added game
+         -- (Minecraft and friends), and printing "Steam: someone" beside a game
+         -- that never came from Steam claims a connection that does not exist:
+         -- the person may not even have a Steam account linked. Done in the SQL
+         -- rather than the embed so no future caller of whoOwns can leak it.
+         CASE WHEN @appid > 0 THEN sa.persona_name END AS personaName,
          sa.added_by AS addedBy
   FROM eligible_members em
   JOIN visible_user_games ug ON ug.user_id = em.user_id AND ug.appid = @appid
@@ -184,6 +188,43 @@ export function whoOwns(
     min: minPlaytime,
     limit,
   }) as OwnerRow[];
+}
+
+const SQL_GUILD_GAME_META = `
+  SELECT g.name AS name, g.icon_hash AS iconHash
+  FROM games g
+  WHERE g.appid = @appid
+    AND EXISTS (
+      SELECT 1
+      FROM visible_user_games ug
+      JOIN eligible_members em ON em.user_id = ug.user_id AND em.guild_id = @guild
+      WHERE ug.appid = g.appid
+    )
+`;
+
+/**
+ * A game's display details, but ONLY if somebody in this guild visibly has it.
+ *
+ * `games` is a GLOBAL table -- one row per appid for the whole bot -- so looking
+ * a name up there answers "does this app exist", not "may this guild see it".
+ * /games who resolved its appid that way and would then render the title, icon
+ * and store link of a game the only local owner had hidden with /steam change.
+ * The owner list was correctly empty; the game was still on screen.
+ *
+ * Deliberately NOT filtered by playtime: "nobody here has played it past 30
+ * minutes" is a real answer about a game the guild really does own, and must
+ * stay distinguishable from "no such game here".
+ */
+export function guildGameMeta(
+  db: Database,
+  guildId: string,
+  appid: number,
+): { name: string; iconHash: string } | null {
+  const row = prep(db, SQL_GUILD_GAME_META).get({ guild: guildId, appid }) as
+    | { name: string; iconHash: string | null }
+    | undefined;
+  if (row === undefined) return null;
+  return { name: row.name, iconHash: row.iconHash ?? '' };
 }
 
 const SQL_LEADERBOARD = `
@@ -569,9 +610,6 @@ export function linkSteam(
       // but only the Steam half of it: manually added games are not the old
       // account's and switching Steam accounts is not a reason to lose them.
       prep(db, SQL_DELETE_STEAM_USER_GAMES).run(userId);
-      // Neither must its exclusions: appids are per-account, so keeping them
-      // would silently suppress unrelated games in the NEW account's library.
-      prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
     }
     prep(db, SQL_INSERT_STEAM).run(id64, userId, addedBy);
     return { ok: true, wiped: current !== undefined };
@@ -587,8 +625,6 @@ export function unlink(db: Database, userId: string): void {
   inTransaction(db, () => {
     prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
     prep(db, SQL_DELETE_STEAM_USER_GAMES).run(userId);
-    // The import checklist's answers were about this account's library.
-    prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
   });
 }
 
@@ -606,7 +642,6 @@ export function forget(db: Database, userId: string): void {
   inTransaction(db, () => {
     prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
     prep(db, SQL_DELETE_USER_GAMES).run(userId);
-    prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
     prep(db, SQL_DELETE_GUILD_MEMBERSHIPS).run(userId);
     prep(db, SQL_SOFT_DELETE_USER).run(userId);
   });
@@ -625,71 +660,43 @@ type RawGameRow = Omit<GameRow, 'tracked' | 'hidden'> & { tracked: number; hidde
 type RawSharedRow = Omit<SharedRow, 'tracked'> & { tracked: number };
 
 /* ------------------------------------------------------------------ *
- * Import checklist: excluded games
+ * Import checklist: what is already imported
  *
- * After a Steam sync the user is shown every game and unchecks the ones they
- * do not want stored. The unchecked appids land here, and syncLibrary reads
- * this table ITSELF rather than accepting a filter from its caller -- so a
- * later /steam update cannot quietly re-import something the user removed.
+ * NOTHING IS STORED ABOUT A REFUSAL. The bot used to keep an `excluded_games`
+ * table so a later import could leave an unticked game unticked; that table is
+ * gone and `migrate()` drops it. Its job is done instead by the absence of a
+ * row: /steam update pre-ticks exactly the games already in the library, so a
+ * game you declined arrives unticked next time because you do not own it here.
+ *
+ * The consequence worth knowing: a declined game is indistinguishable from a
+ * game Steam only just started reporting. Both are "new", both arrive unticked,
+ * and the screen says so.
  * ------------------------------------------------------------------ */
 
-const SQL_GET_EXCLUDED = `SELECT appid FROM excluded_games WHERE user_id = ?`;
-const SQL_LIST_EXCLUDED = `
-  SELECT appid, name FROM excluded_games WHERE user_id = ? ORDER BY name ASC
+const SQL_STEAM_APPIDS = `
+  SELECT appid FROM user_games WHERE user_id = ? AND playtime_tracked = 1
 `;
-const SQL_CLEAR_EXCLUDED = `DELETE FROM excluded_games WHERE user_id = ?`;
-const SQL_INSERT_EXCLUDED = `
-  INSERT INTO excluded_games (user_id, appid, name) VALUES (@user, @appid, @name)
-  ON CONFLICT(user_id, appid) DO UPDATE SET name = excluded.name
-`;
-const SQL_DELETE_EXCLUDED_GAMES = `DELETE FROM excluded_games WHERE user_id = ?`;
-
-/** The appids this user has excluded. A Set because sync tests membership per game. */
-export function getExcludedAppids(db: Database, userId: string): Set<number> {
-  const rows = prep(db, SQL_GET_EXCLUDED).all(userId) as { appid: number }[];
-  return new Set(rows.map((r) => r.appid));
-}
-
-/** Excluded games with their names, so the checklist can offer them back. */
-export function listExcludedGames(db: Database, userId: string): ExcludedRow[] {
-  return prep(db, SQL_LIST_EXCLUDED).all(userId) as ExcludedRow[];
-}
 
 /**
- * Replace the user's whole exclusion set in one transaction.
+ * The Steam appids this user currently has stored.
  *
- * A wholesale replace, not a merge: the checklist always submits the complete
- * answer for the library it was built from, and merging would make a re-check
- * ("actually, do import this one") impossible to express.
- *
- * Deleting the row from user_games here is what makes unchecking an ALREADY
- * IMPORTED game take effect immediately, instead of only at the next sync.
+ * playtime_tracked = 1 scopes it to Steam-sourced rows: a hand-added game has a
+ * synthetic negative id that no Steam response will ever mention, and including
+ * one here would mean nothing.
  */
-export function setExcludedGames(
-  db: Database,
-  userId: string,
-  games: readonly ExcludedRow[],
-): void {
-  inTransaction(db, () => {
-    prep(db, SQL_CLEAR_EXCLUDED).run(userId);
-    const insert = prep(db, SQL_INSERT_EXCLUDED);
-    const drop = prep(db, SQL_REMOVE_USER_GAME);
-    for (const g of games) {
-      if (!Number.isInteger(g.appid)) continue;
-      const name = sanitizeName(g.name) || `App ${g.appid}`;
-      insert.run({ user: userId, appid: g.appid, name });
-      drop.run(userId, g.appid);
-    }
-  });
+export function steamAppids(db: Database, userId: string): Set<number> {
+  const rows = prep(db, SQL_STEAM_APPIDS).all(userId) as { appid: number }[];
+  return new Set(rows.map((r) => r.appid));
 }
 
 /* ------------------------------------------------------------------ *
  * Per-game visibility (/steam change)
  *
- * `hidden` is NOT `excluded`. A hidden game is still yours -- it stays in
- * user_games, still shows in your own /games list, and still counts as
- * something you own -- it is simply withheld from every guild-facing query by
- * the visible_user_games view. An excluded game was never stored at all.
+ * `hidden` is not the same as "never imported". A hidden game is still yours --
+ * it stays in user_games, still shows in your own /games list, and still counts
+ * as something you own -- it is simply withheld from every guild-facing query
+ * by the visible_user_games view. A game left unticked at the import checklist
+ * has no row at all.
  * ------------------------------------------------------------------ */
 
 const SQL_LIST_ALL_USER_GAMES = `
@@ -719,7 +726,7 @@ const SQL_UNHIDE_ALL = `UPDATE user_games SET hidden = 0 WHERE user_id = ?`;
 const SQL_HIDE_ONE = `UPDATE user_games SET hidden = 1 WHERE user_id = ? AND appid = ?`;
 
 /**
- * Replace the user's whole hidden set, like setExcludedGames and for the same
+ * Replace the user's whole hidden set. Wholesale, not a merge, for the same
  * reason: the checklist submits a complete answer, so anything not named is
  * visible. Unhide-everything then hide-the-named keeps that atomic.
  */

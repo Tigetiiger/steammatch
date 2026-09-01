@@ -80,23 +80,6 @@ FROM guild_members gm
 JOIN users u ON u.user_id = gm.user_id
 WHERE gm.visible = 1 AND u.opted_in = 1 AND u.discoverable = 1 AND u.deleted_at IS NULL;
 
--- Steam appids the user unchecked on the post-sync checklist. Sync consults
--- this table itself rather than trusting its caller to pass a filter, for the
--- same reason eligible_members is a view: a predicate that lives in one place
--- cannot be forgotten by a new call site.
---
--- `name` is denormalised on purpose. An excluded game has no user_games row,
--- and if nobody else in any guild owns it there is no `games` row either -- so
--- without the name here the checklist could not list back what was excluded.
--- There is deliberately NO foreign key to games(appid) for the same reason.
-CREATE TABLE IF NOT EXISTS excluded_games (
-  user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-  appid       INTEGER NOT NULL,
-  name        TEXT NOT NULL,
-  excluded_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  PRIMARY KEY (user_id, appid)
-) STRICT, WITHOUT ROWID;
-
 -- NOTE: the `visible_user_games` view lives in migrate() in db/index.ts, NOT
 -- here. It references user_games.hidden, which is a migrated column, and this
 -- file runs BEFORE migrate().

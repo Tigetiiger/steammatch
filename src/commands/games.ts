@@ -14,6 +14,7 @@ import { iconUrl, storeUrl } from '../steam/sync.js';
 import {
   isVisibleInGuild,
   leaderboard,
+  guildGameMeta,
   listGames,
   searchGamesForAutocomplete,
   sharedGames,
@@ -44,7 +45,6 @@ import {
   ROW_LIMITS,
   agoLabel,
   displayNameOf,
-  getGameMeta,
   getGuildStats,
   getLinkInfo,
   guildOnlyEmbed,
@@ -425,13 +425,16 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
   // "-1", and reported that nobody owns the game the user had just been offered.
   let appid: number | null = null;
   if (/^-?\d{1,10}$/.test(raw)) appid = Number.parseInt(raw, 10);
-  if (appid === null || getGameMeta(ctx.db, appid) === null) {
+  // guildGameMeta, not a global lookup: a game nobody here visibly owns must not
+  // resolve at all, or /games who renders the title and icon of something whose
+  // only local owner hid it with /steam change.
+  if (appid === null || guildGameMeta(ctx.db, guildId, appid) === null) {
     const hits = raw.length > 0 ? searchGamesForAutocomplete(ctx.db, guildId, raw, 1) : [];
     const first = hits[0];
     appid = first ? first.appid : null;
   }
 
-  const meta = appid === null ? null : getGameMeta(ctx.db, appid);
+  const meta = appid === null ? null : guildGameMeta(ctx.db, guildId, appid);
   if (appid === null || meta === null) {
     await interaction.editReply({
       embeds: [

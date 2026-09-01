@@ -102,13 +102,20 @@ every game Steam returned, most-played first, **10 to a page**, all ticked, each
 toggle button on its own line. Ten, not twenty-five, is a hard Discord limit and not a taste
 call: a Components V2 message allows 40 components counting nested ones, and an inline row
 costs three of them (Section + TextDisplay + Button). Eleven is the ceiling; the budget is
-pinned by a test. Untick a game and it
-is **never written to the database at all** — not the playtime, not the row. The unticked
-appids are kept in `excluded_games`, and `syncLibrary` reads that table *itself* rather than
-taking a filter from its caller, so a future call site cannot silently re-import something the
-user removed. Unticking a game that was already imported deletes the existing row immediately.
-Backing out of the checklist writes nothing, including on a first link — the Steam identity is
-claimed only after the user has said yes to a concrete list.
+pinned by a test.
+
+Untick a game and it is **never written to the database at all** — not the playtime, not the
+row, and **not a record of the refusal either**. Nothing is stored about what you left out.
+The ticked list is handed to `syncLibrary` as the library, and sync writes what it is given
+and deletes every other Steam-sourced row, so unticking a game that was already imported
+removes it immediately. Backing out of the checklist writes nothing, including on a first link
+— the Steam identity is claimed only after the user has said yes to a concrete list.
+
+**On `/steam update`, only games you already have are pre-ticked.** Everything else arrives
+unticked and the screen says how many: *"3 uut mängu on valimata."* Tick the ones you want.
+That is what replaces the old memory of exclusions — a game you declined comes back unticked
+because you do not own it here, not because anything was written down. The cost is that a
+declined game and a genuinely new one look identical, which is the intended trade.
 
 **`/steam change`** is the same widget asking a different question: ticked means *other people
 in this server can see this game*. An unticked game is still yours — it stays in your
@@ -186,7 +193,7 @@ working panel stops working.
 - **Three hide levels.** Globally undiscoverable (`/privacy`), hidden in one specific server
   (`/privacy`), or hidden game-by-game (`/steam change`). Your own `/games list` keeps working
   in all three cases.
-- `/steam unlink` removes the link, the imported library, the playtime and the exclusion list.
+- `/steam unlink` removes the link, the imported library and the playtime.
   It deliberately keeps **hand-added games**, which did not come from Steam, and only opts the
   person out if nothing survived — otherwise the surviving rows would be stored and invisible,
   which is the same disappearance one layer down. `/privacy → forget me` is the unconditional

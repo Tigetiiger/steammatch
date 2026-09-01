@@ -1,11 +1,16 @@
 /**
- * The import checklist (excluded games) and per-game visibility (/steam change).
+ * The import checklist and per-game visibility (/steam change).
  *
  * These are the two places a user gets to say "no" about a specific game, and
  * they mean different things:
- *   - EXCLUDED: never written to the database at all.
- *   - HIDDEN:   written, still yours, withheld from everyone else.
+ *   - NOT TICKED: no row, and nothing recorded about the refusal either.
+ *   - HIDDEN:     written, still yours, withheld from everyone else.
  * Most of what follows exists to prove the two never bleed into each other.
+ *
+ * The checklist's answer reaches the database as the LIST ITSELF: syncLibrary is
+ * handed only the ticked games and deletes every other Steam-sourced row. These
+ * tests call it the way the command does -- `curated(...)` is a library that has
+ * already been through the screen.
  */
 
 import { mkdtempSync } from 'node:fs';
@@ -19,16 +24,15 @@ import {
   ensureUser,
   findMatches,
   forget,
-  getExcludedAppids,
   guildCatalog,
+  guildGameMeta,
   leaderboard,
   linkSteam,
   listAllUserGames,
-  listExcludedGames,
   listGames,
   searchGamesForAutocomplete,
-  setExcludedGames,
   setHiddenGames,
+  steamAppids,
   setOptedIn,
   sharedGames,
   touchGuildMember,
@@ -90,62 +94,75 @@ beforeEach(() => {
 });
 
 /* ------------------------------------------------------------------ *
- * Excluded games
+ * The import checklist
  * ------------------------------------------------------------------ */
 
+/** A library as it looks after the user has ticked a subset of it. */
+const curated = (games: OwnedGame[]) => source(games);
+const CURATED = { curated: true } as const;
+
 describe('the import checklist', () => {
-  it('never writes a game the user unchecked', async () => {
+  it('never writes a game the user unticked', async () => {
     ensureUser(db, A);
     linkSteam(db, A, A_ID);
-    // What the command does: record the answer, THEN sync.
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
 
-    const out = await syncLibrary(db, A, A_ID, source(LIBRARY));
+    const out = await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!, LIBRARY[1]!]), undefined, CURATED);
 
     expect(out.written).toBe(2);
-    expect(out.excluded).toBe(1);
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([10, 20]);
   });
 
-  it('removes a game that was already imported when it is unchecked later', async () => {
+  it('stores nothing at all about the refusal', async () => {
+    ensureUser(db, A);
+    linkSteam(db, A, A_ID);
+    await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!]), undefined, CURATED);
+
+    // The table this used to be recorded in is gone, and migrate() drops it.
+    const tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+      .all()
+      .map((r) => (r as { name: string }).name);
+    expect(tables).not.toContain('excluded_games');
+    // Nor is the refusal hiding anywhere else: appid 30 leaves no trace.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM games WHERE appid = 30').get()).toEqual({ n: 0 });
+  });
+
+  it('removes a game that was already imported when it is unticked later', async () => {
     await joinGuild(A, A_ID, LIBRARY);
     expect(listGames(db, A, -1, 50, 0)).toHaveLength(3);
 
-    // setExcludedGames drops the existing row itself, so the change is visible
-    // immediately rather than only after the next sync.
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
-    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([10, 20]);
+    const out = await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!, LIBRARY[1]!]), undefined, CURATED);
 
-    // ...and a later /steam update does not bring it back.
-    const out = await syncLibrary(db, A, A_ID, source(LIBRARY));
-    expect(out.excluded).toBe(1);
+    expect(out.removed).toBe(1);
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([10, 20]);
   });
 
-  it('re-checking a game imports it again on the next update', async () => {
+  it('re-ticking a game imports it again, with nothing to clear first', async () => {
     await joinGuild(A, A_ID, LIBRARY);
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
-    expect(getExcludedAppids(db, A)).toEqual(new Set([30]));
+    await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!]), undefined, CURATED);
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([10]);
 
-    // The checklist always submits a COMPLETE answer, so "nothing excluded" is
-    // the empty array -- not an absent call.
-    setExcludedGames(db, A, []);
-    await syncLibrary(db, A, A_ID, source(LIBRARY));
-
+    await syncLibrary(db, A, A_ID, curated(LIBRARY), undefined, CURATED);
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([10, 20, 30]);
   });
 
-  it('keeps the name so an excluded game can be listed back without a games row', () => {
-    ensureUser(db, A);
-    setExcludedGames(db, A, [{ appid: 999, name: 'Never Imported' }]);
-    // Nobody anywhere owns appid 999, so there is no games row to join to.
-    expect(db.prepare('SELECT COUNT(*) AS n FROM games').get()).toEqual({ n: 0 });
-    expect(listExcludedGames(db, A)).toEqual([{ appid: 999, name: 'Never Imported' }]);
+  it('unticking everything empties the library, because the user meant it', async () => {
+    await joinGuild(A, A_ID, LIBRARY);
+    // An empty list straight from Steam is treated as a glitch and ignored --
+    // that guard exists because a malformed response once wiped a real library.
+    await syncLibrary(db, A, A_ID, source([]));
+    expect(listGames(db, A, -1, 50, 0)).toHaveLength(3);
+
+    // The same empty list from the checklist is a deliberate answer.
+    await syncLibrary(db, A, A_ID, curated([]), undefined, CURATED);
+    expect(listGames(db, A, -1, 50, 0)).toHaveLength(0);
   });
 
-  it('does not let one user\'s exclusions affect another\'s import', async () => {
+  it("does not let one user's choices affect another's import", async () => {
     ensureUser(db, A);
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
+    linkSteam(db, A, A_ID);
+    await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!]), undefined, CURATED);
+
     await joinGuild(B, B_ID, LIBRARY);
     expect(listGames(db, B, -1, 50, 0)).toHaveLength(3);
   });
@@ -155,30 +172,42 @@ describe('the import checklist', () => {
     const mc = upsertManualGame(db, 'Minecraft').appid;
     addUserGame(db, A, mc);
 
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
-    await syncLibrary(db, A, A_ID, source(LIBRARY));
+    await syncLibrary(db, A, A_ID, curated([LIBRARY[0]!]), undefined, CURATED);
 
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toContain(mc);
   });
+});
 
-  it('drops exclusions when the Steam identity changes, since appids differ', async () => {
-    await joinGuild(A, A_ID, LIBRARY);
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
+describe('what /steam update pre-ticks', () => {
+  // The command computes `initial` from steamAppids(): what is already stored.
+  // Anything Steam reports that is NOT stored arrives unticked, which covers
+  // both a genuinely new game and one the user declined last time. The two are
+  // deliberately indistinguishable -- that is the whole point of storing
+  // nothing about a refusal.
+  it('reports exactly the Steam rows currently held', async () => {
+    await joinGuild(A, A_ID, [LIBRARY[0]!, LIBRARY[1]!]);
+    expect(steamAppids(db, A)).toEqual(new Set([10, 20]));
 
-    linkSteam(db, A, '76561198000000009');
-    expect(getExcludedAppids(db, A)).toEqual(new Set());
+    const fresh = [...LIBRARY, g(40, 'Brand New Game', 10)];
+    const preTicked = fresh.filter((game) => steamAppids(db, A).has(game.appid));
+    const untTicked = fresh.filter((game) => !steamAppids(db, A).has(game.appid));
+
+    expect(preTicked.map((x) => x.appid)).toEqual([10, 20]);
+    // 30 was declined at the first import; 40 has never been seen. Both new.
+    expect(untTicked.map((x) => x.appid)).toEqual([30, 40]);
   });
 
-  it('drops exclusions on unlink and on forget', async () => {
+  it('excludes hand-added games, whose ids no Steam response can mention', async () => {
     await joinGuild(A, A_ID, LIBRARY);
-    setExcludedGames(db, A, [{ appid: 30, name: 'x' }]);
-    unlink(db, A);
-    expect(getExcludedAppids(db, A)).toEqual(new Set());
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    expect(steamAppids(db, A)).toEqual(new Set([10, 20, 30]));
+    expect(steamAppids(db, A).has(mc)).toBe(false);
+  });
 
-    await joinGuild(A, A_ID, LIBRARY);
-    setExcludedGames(db, A, [{ appid: 30, name: 'x' }]);
-    forget(db, A);
-    expect(getExcludedAppids(db, A)).toEqual(new Set());
+  it('is empty for a first import, which is why that case ticks everything', () => {
+    ensureUser(db, A);
+    expect(steamAppids(db, A)).toEqual(new Set());
   });
 });
 
@@ -252,10 +281,44 @@ describe('/steam change visibility', () => {
     );
   });
 
-  it('is independent of exclusion: a hidden game can also be excluded', async () => {
+  it('will not even name a hidden game on /games who', async () => {
+    // The regression: `games` is a GLOBAL table, so resolving the appid there
+    // found the name, and the screen rendered the title, icon and store link of
+    // a game whose only local owner had just hidden it. The owner list was
+    // empty, which read as "nobody plays this" rather than "not your business".
+    expect(guildGameMeta(db, G, 30)).toMatchObject({ name: 'Embarrassing Game' });
+    // Both members own it here, so it takes both of them hiding it -- one
+    // person's choice must not blank a game somebody else is happy to show.
     setHiddenGames(db, A, [30]);
-    setExcludedGames(db, A, [{ appid: 30, name: 'Embarrassing Game' }]);
-    await syncLibrary(db, A, A_ID, source(LIBRARY));
+    expect(guildGameMeta(db, G, 30)).toMatchObject({ name: 'Embarrassing Game' });
+    setHiddenGames(db, B, [30]);
+    expect(guildGameMeta(db, G, 30)).toBeNull();
+    expect(whoOwns(db, G, 30, -1, 25)).toEqual([]);
+  });
+
+  it('still names a game the guild owns but nobody has really played', () => {
+    // Not the same case, and it must stay distinguishable: this game IS here,
+    // the answer is just that nobody cleared the threshold. So the meta lookup
+    // is deliberately not filtered by playtime.
+    expect(guildGameMeta(db, G, 30)).toMatchObject({ name: 'Embarrassing Game' });
+    expect(whoOwns(db, G, 30, 99999, 25)).toEqual([]);
+  });
+
+  it('does not name a game only somebody in ANOTHER guild owns', async () => {
+    await joinGuild(B, B_ID, LIBRARY);
+    const OTHER = 'guild-2';
+    expect(guildGameMeta(db, OTHER, 10)).toBeNull();
+  });
+
+  it('does not name a game whose owners are all ineligible here', () => {
+    setOptedIn(db, A, false);
+    setOptedIn(db, B, false);
+    expect(guildGameMeta(db, G, 10)).toBeNull();
+  });
+
+  it('is independent of the checklist: a hidden game can also be dropped', async () => {
+    setHiddenGames(db, A, [30]);
+    await syncLibrary(db, A, A_ID, source([LIBRARY[0]!, LIBRARY[1]!]), undefined, { curated: true });
     expect(listAllUserGames(db, A).map((r) => r.appid).sort()).toEqual([10, 20]);
   });
 });
@@ -299,8 +362,34 @@ describe('migration onto a database created before curation existed', () => {
     touchGuildMember(db2, G, 'legacy');
     expect(whoOwns(db2, G, 10, 30, 25)).toEqual([]);
 
-    setExcludedGames(db2, 'legacy', [{ appid: 10, name: 'Factorio' }]);
-    expect(getExcludedAppids(db2, 'legacy')).toEqual(new Set([10]));
+    expect(steamAppids(db2, 'legacy')).toEqual(new Set([10]));
+    db2.close();
+  });
+
+  it('drops an existing excluded_games table, rows and all', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'sm-exc-')), 'old.sqlite');
+    const old = new Database(path);
+    old.exec(`
+      CREATE TABLE users (user_id TEXT PRIMARY KEY, opted_in INTEGER NOT NULL DEFAULT 0,
+        discoverable INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at INTEGER) STRICT;
+      CREATE TABLE excluded_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL,
+        name TEXT NOT NULL, excluded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (user_id, appid)) STRICT, WITHOUT ROWID;
+    `);
+    old.prepare('INSERT INTO users (user_id, opted_in) VALUES (?,1)').run('legacy');
+    old
+      .prepare('INSERT INTO excluded_games (user_id, appid, name) VALUES (?,?,?)')
+      .run('legacy', 30, 'Embarrassing Game');
+    expect(old.prepare('SELECT COUNT(*) AS n FROM excluded_games').get()).toEqual({ n: 1 });
+    old.close();
+
+    const db2 = openDb(path);
+    const tables = db2
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+      .all()
+      .map((r) => (r as { name: string }).name);
+    expect(tables).not.toContain('excluded_games');
     db2.close();
   });
 });

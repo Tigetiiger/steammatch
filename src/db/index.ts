@@ -56,6 +56,14 @@ function migrate(db: Database): void {
   // Per-game visibility, set from /steam change. 1 means the row still counts
   // as the owner's own game but is withheld from every guild-facing query.
   addColumnIfMissing(db, 'user_games', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
+  // The bot used to remember every game a user unticked, so the next import
+  // could leave it unticked. That memory is gone: nothing is stored about a
+  // refusal any more, and an existing table full of them is dropped rather than
+  // left to rot. What replaces it is that /steam update pre-ticks only games
+  // already in the library, so a game you did not import stays unticked because
+  // you do not own it here -- no record of the refusal required.
+  db.exec('DROP TABLE IF EXISTS excluded_games');
+
   // The partial unique index depends on games.source, so it cannot live in
   // schema.sql for databases created before that column existed.
   db.exec(

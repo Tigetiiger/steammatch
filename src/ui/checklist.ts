@@ -205,8 +205,8 @@ export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistRes
 
   const sid = claimSessionId(opts.ownerId);
   const checked = new Set<string>();
-  // Intersected with `items`, not copied: an id that is no longer in the
-  // library (a refunded game still sitting in the exclusion table) must not
+  // Intersected with `items`, not copied: an id the caller pre-ticks that is no
+  // longer in the library (a refunded game still in the stored set) must not
   // survive a save and become permanently unreachable.
   const present = new Set(items.map((i) => i.id));
   for (const id of opts.initial) if (present.has(id)) checked.add(id);

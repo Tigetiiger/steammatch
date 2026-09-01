@@ -47,10 +47,7 @@ export interface GameRow {
 }
 
 /** A game the user unchecked at the import checklist, so it was never stored. */
-export interface ExcludedRow {
-  appid: number;
-  name: string;
-}
+
 export interface SharedRow {
   appid: number;
   name: string;

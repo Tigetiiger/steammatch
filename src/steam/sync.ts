@@ -9,7 +9,6 @@
 import type { Database } from 'better-sqlite3';
 import type { LibraryResult, OwnedGame, ProfileState } from '../types.js';
 import { foldName, sanitizeName } from '../text.js';
-import { getExcludedAppids } from '../db/queries.js';
 
 // Re-exported for callers that already import these from here.
 export { foldName, sanitizeName };
@@ -27,10 +26,8 @@ export interface SyncOutcome {
   state: ProfileState;
   /** Rows inserted or updated in user_games. */
   written: number;
-  /** Rows removed because the app is no longer in the library (refund, revoked share). */
+  /** Rows removed because the app is no longer in the list (refund, or unticked). */
   removed: number;
-  /** Games skipped because the user unchecked them at the import checklist. */
-  excluded: number;
   staleAfter: number;
   failCount: number;
   error: string | null;
@@ -117,6 +114,13 @@ export async function syncLibrary(
   id64: string,
   client: LibrarySource,
   now: number = Math.floor(Date.now() / 1000),
+  /**
+   * `curated: true` means this list is the user's own answer from the import
+   * checklist, not whatever Steam happened to return. It only affects the
+   * empty-library guard below: an empty CURATED list is a deliberate "store
+   * nothing", while an empty list straight from Steam is a suspected glitch.
+   */
+  opts: { curated?: boolean } = {},
 ): Promise<SyncOutcome> {
   let result: LibraryResult;
   try {
@@ -132,15 +136,15 @@ export async function syncLibrary(
   const games = hasAuthoritativeGames(result.state) ? result.games : null;
   const staleAfter = now + ttlFor(result.state);
 
-  // Read INSIDE the transaction so a checklist submitted mid-sync cannot be
-  // half-applied. syncLibrary loads this itself rather than taking it as an
-  // argument: a caller that forgot to pass it would silently re-import every
-  // game the user had removed.
+  // syncLibrary writes exactly the games it is handed and deletes every other
+  // Steam-sourced row. That is the whole filtering mechanism now: the import
+  // checklist hands it a list containing only what the user ticked, so an
+  // unticked game is never written, and an unticked game that WAS imported is
+  // deleted because it is absent from the list. Nothing is remembered about the
+  // refusal -- see the note in db/queries.ts.
   const run = db.transaction(() => {
-    const excludedAppids = getExcludedAppids(db, userId);
     let written = 0;
     let removed = 0;
-    let excluded = 0;
 
     if (games !== null) {
       // A malformed Steam response once classified as an authoritative empty
@@ -148,10 +152,12 @@ export async function syncLibrary(
       // before deleting: a one-off glitch cannot destroy a snapshot, but a user
       // who genuinely refunded everything still gets cleaned up on the next sync.
       const wasEmpty = previousState(db, id64) === 'empty';
-      if (games.length === 0 && !wasEmpty && countUserGames(db, userId) > 0) {
+      const suspiciousEmpty =
+        games.length === 0 && !opts.curated && !wasEmpty && countUserGames(db, userId) > 0;
+      if (suspiciousEmpty) {
         removed = 0;
       } else {
-        ({ written, removed, excluded } = writeGames(db, userId, games, now, excludedAppids));
+        ({ written, removed } = writeGames(db, userId, games, now));
       }
     }
 
@@ -172,11 +178,11 @@ export async function syncLibrary(
       id64,
     );
 
-    return { written, removed, excluded };
+    return { written, removed };
   });
 
-  const { written, removed, excluded } = run();
-  return { state: result.state, written, removed, excluded, staleAfter, failCount: 0, error: null };
+  const { written, removed } = run();
+  return { state: result.state, written, removed, staleAfter, failCount: 0, error: null };
 }
 
 function writeGames(
@@ -184,9 +190,7 @@ function writeGames(
   userId: string,
   games: readonly OwnedGame[],
   now: number,
-  /** Appids the user unchecked at the import checklist. Never written, never staged. */
-  excludedAppids: ReadonlySet<number>,
-): { written: number; removed: number; excluded: number } {
+): { written: number; removed: number } {
   const upsertGame = db.prepare(
     `INSERT INTO games (appid, name, name_folded, icon_hash, last_seen_at)
      VALUES (?, ?, ?, ?, ?)
@@ -213,15 +217,8 @@ function writeGames(
   const stage = db.prepare('INSERT OR IGNORE INTO _sync_appids (appid) VALUES (?)');
 
   const seen = new Set<number>();
-  let excluded = 0;
   for (const game of games) {
     if (!Number.isInteger(game.appid) || seen.has(game.appid)) continue;
-    // Deliberately NOT staged either. Staying out of _sync_appids is what makes
-    // the delete below remove a game the user excluded after it was imported.
-    if (excludedAppids.has(game.appid)) {
-      excluded++;
-      continue;
-    }
     seen.add(game.appid);
     const name = sanitizeName(game.name) || `App ${game.appid}`;
     upsertGame.run(game.appid, name, foldName(name), game.iconHash, now);
@@ -235,8 +232,9 @@ function writeGames(
     stage.run(game.appid);
   }
 
-  // Everything the user owned last time but not now: refunds, revoked family shares,
-  // delisted apps. Leaving them would inflate every overlap query forever.
+  // Everything the user owned last time but not in this list: refunds, revoked
+  // family shares, delisted apps, and games unticked on the checklist. Leaving
+  // them would inflate every overlap query forever.
   const del = db
     .prepare(
       // playtime_tracked = 1 scopes this to Steam-sourced rows. Without it, a
@@ -251,7 +249,7 @@ function writeGames(
 
   db.exec('DELETE FROM _sync_appids');
 
-  return { written: seen.size, removed: del.changes, excluded };
+  return { written: seen.size, removed: del.changes };
 }
 
 /** Failures never touch user_games: the last good snapshot stays queryable. */
@@ -274,5 +272,5 @@ function recordFailure(db: Database, id64: string, message: string, now: number)
       WHERE steam_id64 = ?`,
   ).run(staleAfter, message.slice(0, 500), failCount, id64);
 
-  return { state: 'error', written: 0, removed: 0, excluded: 0, staleAfter, failCount, error: message };
+  return { state: 'error', written: 0, removed: 0, staleAfter, failCount, error: message };
 }
