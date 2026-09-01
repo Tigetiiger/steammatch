@@ -196,12 +196,22 @@ const SQL_LEADERBOARD = `
   JOIN games g ON g.appid = ug.appid
   WHERE em.guild_id = @guild
     AND (ug.playtime_tracked = 0 OR ug.playtime_forever > @min)
-    -- @mine is '' for the whole-guild board, or a user id to restrict the board
-    -- to games that user has: "how many people here share MY games".
-    -- Also the view: a game you hid does not belong on a board you publish.
-    AND (@mine = '' OR EXISTS (
-      SELECT 1 FROM visible_user_games mine
-      WHERE mine.user_id = @mine AND mine.appid = ug.appid
+    -- @subject is '' for the whole-guild board, or a user id to restrict the
+    -- board to games that person has: "how many people here share THEIR games".
+    -- Through the view, so a game they hid does not appear on a public board.
+    AND (@subject = '' OR EXISTS (
+      SELECT 1 FROM visible_user_games s
+      WHERE s.user_id = @subject AND s.appid = ug.appid
+    ))
+    -- The subject used to be the caller and only the caller, so their own
+    -- visibility never needed checking. Now that anyone can be the subject it
+    -- does: without this, naming somebody who has hidden themselves in this
+    -- guild would read their library back out through the board.
+    -- Viewing your OWN board still works while hidden -- hiding yourself from
+    -- other people must not hide you from yourself.
+    AND (@subject = '' OR @subject = @viewer OR EXISTS (
+      SELECT 1 FROM eligible_members sm
+      WHERE sm.user_id = @subject AND sm.guild_id = @guild
     ))
   GROUP BY ug.appid, g.name
   HAVING COUNT(*) >= @minOwners
@@ -227,20 +237,41 @@ export function leaderboard(
   minOwners: number,
   limit: number,
   /**
-   * When set, only games this user has are ranked -- "how many people here
-   * share the games I have", rather than the whole server's board. The counts
-   * still include everyone, so a row of `4 own` means four people including
-   * them.
+   * Whose point of view. Null is the whole-guild board; a user id ranks only
+   * the games THAT person has, by how many people here share them. The counts
+   * still include everyone, so `4 inimest` means four people including them.
+   *
+   * Anyone may be the subject, so unless they are also the viewer they must be
+   * visible in this guild -- enforced in the SQL above, not by the caller.
    */
-  onlyForUser: string | null = null,
+  subjectUserId: string | null = null,
+  /** Who is asking. Only ever used to let someone see their own board. */
+  viewerUserId: string | null = null,
 ): LeaderRow[] {
   return prep(db, SQL_LEADERBOARD).all({
     guild: guildId,
     min: minPlaytime,
     minOwners,
     limit,
-    mine: onlyForUser ?? '',
+    subject: subjectUserId ?? '',
+    viewer: viewerUserId ?? '',
   }) as LeaderRow[];
+}
+
+const SQL_IS_VISIBLE_HERE = `
+  SELECT 1 AS ok FROM eligible_members WHERE guild_id = ? AND user_id = ?
+`;
+
+/**
+ * Is this person discoverable in this guild?
+ *
+ * Only for choosing the right MESSAGE -- the leaderboard query enforces the
+ * same rule itself, so a caller that forgets this leaks nothing. It exists
+ * because "they are hidden here" and "you two share nothing" are different
+ * answers and an empty board cannot tell them apart.
+ */
+export function isVisibleInGuild(db: Database, guildId: string, userId: string): boolean {
+  return prep(db, SQL_IS_VISIBLE_HERE).get(guildId, userId) !== undefined;
 }
 
 /** A user must share at least this many games before they are a "match" at all. */

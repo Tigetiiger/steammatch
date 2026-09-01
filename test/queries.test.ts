@@ -4,6 +4,8 @@ import { applySchema } from '../src/db/index.js';
 import {
   ensureUser,
   findMatches,
+  isVisibleInGuild,
+  setHiddenGames,
   forget,
   getGuildMinPlaytime,
   leaderboard,
@@ -324,6 +326,81 @@ describe('leaderboard', () => {
       { appid: DELTA, name: 'Delta', owners: 2, guildMinutes: 3031 },
     ]);
     expect(leaderboard(db, G2, 30, 1, 50).some((r) => r.appid === ZETA)).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Leaderboard from one person's point of view
+ *
+ * The subject used to be the caller and only the caller, so nothing ever had
+ * to check whether the subject was allowed to be looked at. Now that anyone
+ * can be named, that check is the whole point of these tests.
+ * ------------------------------------------------------------------ */
+
+describe("leaderboard from a named person's point of view", () => {
+  it('ranks only that person\'s games, counting everyone who shares them', () => {
+    // Bob has ALPHA, BETA, DELTA, OJ, EPSILON. EPSILON is his alone, so it
+    // fails minOwners; the rest are ranked by how many people here share them.
+    const board = leaderboard(db, G1, 0, 2, 50, BOB, ALICE);
+    expect(ids(board)).toEqual([ALPHA, BETA, DELTA, OJ]);
+    // Counts include Bob himself: three people have ALPHA above 0.
+    expect(board.find((r) => r.appid === ALPHA)?.owners).toBe(3);
+    // FRANK has GAMMA and ZETA, which Bob does not, so they are absent.
+    expect(ids(board)).not.toContain(GAMMA);
+    expect(ids(board)).not.toContain(ZETA);
+  });
+
+  it('is not the same board as the whole guild\'s', () => {
+    const guildBoard = ids(leaderboard(db, G1, 0, 2, 50));
+    const franksBoard = ids(leaderboard(db, G1, 0, 2, 50, FRANK, ALICE));
+    expect(guildBoard).toContain(GAMMA);
+    expect(franksBoard).toContain(GAMMA);
+    // Frank does not own EPSILON or OJ, so his board cannot show them.
+    expect(franksBoard).not.toContain(EPSILON);
+    expect(franksBoard).not.toContain(OJ);
+    expect(guildBoard).not.toEqual(franksBoard);
+  });
+
+  it('refuses a subject who is opted out, deleted, or hidden in this guild', () => {
+    // Carol has huge playtimes on every game; if the guard failed her library
+    // would be readable through the board by anyone who typed her name.
+    expect(leaderboard(db, G1, 0, 1, 50, CAROL, ALICE)).toEqual([]);
+    expect(leaderboard(db, G1, 0, 1, 50, DAVE, ALICE)).toEqual([]);
+    // Bob is visible in G1 but hidden in G2. Naming him from G2 must fail even
+    // though the exact same call from G1 succeeds.
+    expect(leaderboard(db, G2, 0, 1, 50, BOB, ALICE)).toEqual([]);
+    expect(leaderboard(db, G1, 0, 1, 50, BOB, ALICE).length).toBeGreaterThan(0);
+  });
+
+  it('still lets you see your OWN board while hidden', () => {
+    // Hiding yourself from other people must not hide you from yourself --
+    // the same carve-out listGames() has.
+    expect(leaderboard(db, G2, 0, 1, 50, BOB, BOB).length).toBeGreaterThan(0);
+    // ...and that carve-out is keyed on the viewer, so it does not help ALICE.
+    expect(leaderboard(db, G2, 0, 1, 50, BOB, ALICE)).toEqual([]);
+  });
+
+  it('defaults to refusing when no viewer is supplied', () => {
+    // A caller that forgets the viewer gets the safe answer, not the leaky one.
+    expect(leaderboard(db, G2, 0, 1, 50, BOB)).toEqual([]);
+  });
+
+  it('omits games the subject has hidden with /steam change', () => {
+    const before = ids(leaderboard(db, G1, 0, 2, 50, BOB, ALICE));
+    expect(before).toContain(ALPHA);
+    setHiddenGames(db, BOB, [ALPHA]);
+    const after = ids(leaderboard(db, G1, 0, 2, 50, BOB, ALICE));
+    expect(after).not.toContain(ALPHA);
+  });
+});
+
+describe('isVisibleInGuild', () => {
+  it('agrees with the guard the leaderboard query applies', () => {
+    expect(isVisibleInGuild(db, G1, BOB)).toBe(true);
+    expect(isVisibleInGuild(db, G2, BOB)).toBe(false); // hidden there
+    expect(isVisibleInGuild(db, G1, CAROL)).toBe(false); // opted out
+    expect(isVisibleInGuild(db, G1, DAVE)).toBe(false); // soft deleted
+    expect(isVisibleInGuild(db, G1, ERIN)).toBe(false); // not a member of G1
   });
 });
 

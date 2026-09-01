@@ -64,7 +64,7 @@ All user-facing copy lives in `src/ui/embeds.ts`; that is the file to open to ch
 | `/games list [min_playtime] [public]` | Your library, filterable and paginated |
 | `/games shared <user> [min_playtime]` | What you and one other person both play |
 | `/games who <game> [min_playtime]` | Who else in this server plays it |
-| `/games leaderboard [mine] [min_playtime]` | The server's most commonly owned games. `mine: true` ranks **your** games by how many people here share them |
+| `/games leaderboard [user] [min_playtime]` | The server's most commonly owned games. `user:@someone` switches to **their** point of view: their games, ranked by how many people here share them |
 | `/match [min_playtime] [sort]` | Members ranked by overlap with you |
 | `/privacy` | Hide yourself, or delete everything |
 | `/roles …` | **Unrelated to games.** Self-service reaction roles — see below |
@@ -215,7 +215,8 @@ Steam API Terms require ("you will only retrieve Steam Data about a Steam end us
 requested by the end user").
 
 See [DECISIONS.md](DECISIONS.md) for why the non-obvious choices were made, and what
-was given up for each.
+was given up for each, and [PERMISSIONS.md](PERMISSIONS.md) for who can run what and
+which permissions the bot itself needs.
 
 ## Development
 
@@ -251,7 +252,7 @@ src/
                   consent + refresh cooldown)
 test/             steam, sync, queries, embeds, paginate, text, security,
                   on-behalf, manual-games, curation, roles, and end-to-end
-                  integration — 305 tests
+                  integration — 312 tests
 ```
 
 ### Things that will bite you if you forget them
@@ -286,6 +287,13 @@ test/             steam, sync, queries, embeds, paginate, text, security,
 - **Manual games have no playtime and must never be filtered out.** Anything that
   filters on `playtime_forever` needs the `playtime_tracked = 0 OR ...` escape, and
   a Steam sync's delete must be scoped to `playtime_tracked = 1` or it wipes them.
+- **`/games leaderboard user:` can name anyone, so the subject needs a
+  visibility check the old `mine:` flag never did.** When the subject was always
+  the caller, `eligible_members` on the subject was redundant. It is not any
+  more: without it, naming someone who has hidden themselves here reads their
+  library back out through the board. The check is in the SQL, and the one
+  carve-out — you can always see your own board — is keyed on the viewer, so
+  a caller that omits the viewer gets the safe answer.
 - **Anything guild-facing reads `visible_user_games`, never `user_games`.** The two
   deliberate exceptions both show a user their own rows (`listGames`,
   `userManualGames`) plus `guildCatalog`'s "do I already have this" probe, which

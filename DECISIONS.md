@@ -250,6 +250,36 @@ in every query.
 
 ---
 
+## 13. The leaderboard takes a person, not a `mine` flag
+
+**Context.** `/games leaderboard mine: true` ranked *your* games by how many
+people here share them. Useful, but only about yourself.
+
+**Decision.** Replaced with `user:@someone`. Empty is the whole-server board;
+naming a person gives their point of view, and anyone can name anyone.
+
+**The catch.** When the subject could only ever be the caller, the query never
+needed to ask whether the subject was allowed to be looked at — you are always
+allowed to look at yourself. Opening it to any member turns the board into a way
+to read a library, so the subject now has to pass `eligible_members` for this
+guild.
+
+**Where the check lives.** In the SQL, not the command. The command *also*
+checks, but only to choose a better message — an empty board cannot say whether
+that is "they are hidden here" or "you share nothing". The enforcement is the
+one that cannot be forgotten by a future caller.
+
+**Carve-out.** You can always see your own board, even while hidden in that
+guild — the same rule `listGames()` follows: hiding yourself from other people
+must not hide you from yourself. It is keyed on the viewer, so
+`leaderboard(..., subject)` with no viewer argument returns the *safe* answer
+rather than the leaky one.
+
+**Falls out for free.** `minOwners = 2` means a game only appears once two
+eligible members have it, so a person's solo games never surface on their board.
+
+---
+
 ## Known open item
 
 `askConsent()` / `consentEmbed()` in `src/commands/steam.ts` are a consent

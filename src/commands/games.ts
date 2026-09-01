@@ -12,6 +12,7 @@ import type { SlashCommandIntegerOption } from 'discord.js';
 import type { GameRow, LeaderRow, Minutes, SharedRow } from '../types.js';
 import { iconUrl, storeUrl } from '../steam/sync.js';
 import {
+  isVisibleInGuild,
   leaderboard,
   listGames,
   searchGamesForAutocomplete,
@@ -121,10 +122,11 @@ const data = new SlashCommandBuilder()
     s
       .setName('leaderboard')
       .setDescription('Mida selles serveris kõige rohkem mängitakse')
-      .addBooleanOption((o) =>
+      .addUserOption((o) =>
         o
-          .setName('mine')
-          .setDescription('Ainult sinu mängud, järjestatud jagajate arvu järgi'),
+          .setName('user')
+          .setDescription('Kelle vaatenurgast — tema mängud jagajate arvu järgi. Tühi = kogu server')
+          .setRequired(false),
       )
       .addIntegerOption(minPlaytimeOption),
   );
@@ -503,29 +505,54 @@ async function leaderboardSub(interaction: Inter, ctx: Ctx, min: Minutes): Promi
   const guildId = interaction.guildId;
   if (!guildId) return;
 
-  const mine = interaction.options.getBoolean('mine') === true;
-  // Both boards need 2+ owners: a game only you have is not "shared with you".
+  // Anyone's point of view, not just the caller's. Empty means the whole server.
+  const target = interaction.options.getUser('user');
+  const subjectId = target?.id ?? null;
+  const viewerId = interaction.user.id;
+  const subjectIsViewer = subjectId === viewerId;
+
+  if (target?.bot) {
+    await interaction.editReply({
+      embeds: [noticeEmbed('Botid ei mängi', 'Vali päris inimene.', COLORS.warn)],
+    });
+    return;
+  }
+
+  // The query enforces this itself; checking here only buys a message that says
+  // WHY the board is empty, which an empty result set cannot distinguish.
+  if (subjectId !== null && !subjectIsViewer && !isVisibleInGuild(ctx.db, guildId, subjectId)) {
+    await interaction.editReply({
+      embeds: [
+        noticeEmbed(
+          'Seda liiget ma siin näidata ei saa',
+          'Ta ei ole selles serveris nähtav või pole oma mänge lisanud.',
+          COLORS.warn,
+        ),
+      ],
+    });
+    return;
+  }
+
+  // Both boards need 2+ owners: a game only one person has is not "shared".
   const minOwners = LEADERBOARD_MIN_OWNERS;
 
   const rows: LeaderRow[] = [
-    ...leaderboard(
-      ctx.db,
-      guildId,
-      min,
-      minOwners,
-      ROW_LIMITS.leaderboard,
-      mine ? interaction.user.id : null,
-    ),
+    ...leaderboard(ctx.db, guildId, min, minOwners, ROW_LIMITS.leaderboard, subjectId, viewerId),
   ].sort((a, b) => b.owners - a.owners || b.guildMinutes - a.guildMinutes);
   const stats = getGuildStats(ctx.db, guildId);
   const guildLabel = interaction.guild?.name ?? 'This server';
+  const subjectName = subjectId === null ? null : displayNameOf(interaction, subjectId);
 
   if (rows.length === 0) {
     await interaction.editReply({
       embeds: [
         noticeEmbed(
-          `${gameName(guildLabel, 80)} — pole veel midagi järjestada`,
-          `Ühelgi mängul pole kahte liiget, kes oleksid seda mänginud üle ${fmtMinutes(min)}. Kui veel paar inimest käivitavad **/games add**, siis täitub.`,
+          subjectId === null
+            ? `${gameName(guildLabel, 80)} — pole veel midagi järjestada`
+            : `${gameName(subjectIsViewer ? 'Sina' : (subjectName ?? 'Tema'), 60)} — pole veel midagi järjestada`,
+          subjectId === null
+            ? `Ühelgi mängul pole kahte liiget, kes oleksid seda mänginud üle ${fmtMinutes(min)}. Kui veel paar inimest käivitavad **/games add**, siis täitub.`
+            : `Ühtki ${subjectIsViewer ? 'sinu' : 'tema'} mängu ei mängi siin keegi teine üle ${fmtMinutes(min)}. Proovi väiksemat **min_playtime** väärtust.`,
           COLORS.warn,
         ),
       ],
@@ -542,6 +569,8 @@ async function leaderboardSub(interaction: Inter, ctx: Ctx, min: Minutes): Promi
     render: (v) =>
       leaderboardEmbed({
         guildName: guildLabel,
+        subjectName,
+        subjectIsViewer,
         pageRows: v.pageRows,
         offset: v.offset,
         page: v.page,
@@ -549,7 +578,7 @@ async function leaderboardSub(interaction: Inter, ctx: Ctx, min: Minutes): Promi
         memberCount: stats.members,
         distinctGames: stats.distinctGames,
         filter: v.filter,
-        scope: mine ? 'mine' : 'guild',
+        scope: subjectId === null ? 'guild' : 'user',
       }),
   });
 }

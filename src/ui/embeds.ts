@@ -691,8 +691,12 @@ export function matchSortRow(
 /* --- /games leaderboard (prototype screen 8) ------------------------------ */
 
 export interface LeaderboardView {
-  /** 'guild' = the whole server's board; 'mine' = only games the caller has. */
-  scope?: 'guild' | 'mine';
+  /** 'guild' = the whole server's board; 'user' = one person's point of view. */
+  scope?: 'guild' | 'user';
+  /** Display name of the person whose board this is, when scope is 'user'. */
+  subjectName?: string | null;
+  /** True when that person is the one who ran the command. */
+  subjectIsViewer?: boolean;
   guildName: string;
   pageRows: LeaderRow[];
   offset: number;
@@ -704,13 +708,14 @@ export interface LeaderboardView {
 }
 
 export function leaderboardEmbed(v: LeaderboardView): EmbedBuilder {
-  const mine = v.scope === 'mine';
+  const mine = v.scope === 'user';
+  const whose = v.subjectIsViewer ? 'Sinu' : `${safeName(v.subjectName, 60)}`;
   const lines = v.pageRows.map(
     (g, i) =>
       `${rank(v.offset + i + 1)} **${gameName(g.name)}** · \`${num(g.owners)} ${plural(g.owners, 'inimene', 'inimest')}\``,
   );
   const empty = mine
-    ? '*Keegi siin ei jaga sinuga veel ühtki mängu.*'
+    ? '*Selle filtriga ei jaga keegi siin veel ühtki neist mängudest.*'
     : '*Ühelgi mängul pole veel kahte mängijat selle filtriga.*';
   const body = lines.length > 0 ? lines : [empty];
 
@@ -719,7 +724,7 @@ export function leaderboardEmbed(v: LeaderboardView): EmbedBuilder {
     .setTitle(
       truncate(
         mine
-          ? 'Sinu mängud — enim jagatud'
+          ? `${whose} mängud — enim jagatud`
           : `${safeName(v.guildName, 80)} — enim mängitud`,
         LIMITS.title,
       ),
@@ -727,7 +732,7 @@ export function leaderboardEmbed(v: LeaderboardView): EmbedBuilder {
     .setDescription(
       joinLines([
         mine
-          ? 'Sinu mängud, järjestatud selle järgi, mitu inimest siin neid veel mängib.'
+          ? `${v.subjectIsViewer ? 'Sinu' : whose} mängud, järjestatud selle järgi, mitu inimest siin neid veel mängib. Arvestus sisaldab ${v.subjectIsViewer ? 'sind' : 'teda'}.`
           : `Mängud, mida vähemalt 2 liiget on mänginud üle ${fmtMinutes(v.filter)}.`,
         '',
         ...body,
