@@ -548,47 +548,42 @@ describe('searchGuildCatalog', () => {
 });
 
 describe('the /games add panel layout', () => {
-  const row = (sid: string, n: number) =>
-    panelComponents(
-      sid,
-      Array.from({ length: n }, (_, i) => ({ appid: 100 + i, name: `Game ${i}`, owners: 2 })),
-    ).map((r) => r.toJSON());
-
-  it('offers a way past the select menu, whatever the catalogue size', () => {
-    const ids = row('abc12345', 40)
+  const rows = () => panelComponents('abc12345').map((r) => r.toJSON());
+  const ids = () =>
+    rows()
       .flatMap((r) => r.components)
       .map((c) => ('custom_id' in c ? c.custom_id : null));
-    // The menu is capped at 25 by Discord, so browse is the ONLY component that
-    // can reach game 26 and beyond.
-    expect(ids).toContain('gp:abc12345:browse');
+
+  it('carries no select menu at all', () => {
+    // A select menu holds 25 options because that is Discord's cap, so it could
+    // only ever be a shortlist wearing a catalogue's costume. "Sirvi kõiki"
+    // answers the same question without a ceiling; keeping both would be two
+    // ways of doing one thing, the worse one first.
+    for (const r of rows()) {
+      for (const c of r.components) expect('options' in c).toBe(false);
+    }
+    expect(ids()).not.toContain('gp:abc12345:pick');
   });
 
-  it('caps the select menu at 25 while the catalogue is larger', () => {
-    const menu = row('abc12345', 40)[0]!.components[0]!;
-    expect('options' in menu ? menu.options.length : 0).toBe(25);
-  });
-
-  it('drops the select menu entirely when there is nothing to pick', () => {
-    const rows = row('abc12345', 0);
-    expect(rows.every((r) => r.components.every((c) => 'custom_id' in c))).toBe(true);
-    const ids = rows.flatMap((r) => r.components).map((c) => ('custom_id' in c ? c.custom_id : null));
-    expect(ids).toContain('gp:abc12345:browse');
+  it('offers the browse button, which is now the only way into the catalogue', () => {
+    expect(ids()).toContain('gp:abc12345:browse');
   });
 
   it('never puts more than five components in one action row', () => {
     // The primary actions used to share a row with the quick-add buttons under
     // a slice(0, 5); a second quick-add game would have silently eaten one.
-    for (const r of row('abc12345', 40)) expect(r.components.length).toBeLessThanOrEqual(5);
+    for (const r of rows()) expect(r.components.length).toBeLessThanOrEqual(5);
   });
 
   it('keeps every primary action reachable, quick-add list notwithstanding', () => {
-    const ids = row('abc12345', 40)
-      .flatMap((r) => r.components)
-      .map((c) => ('custom_id' in c ? c.custom_id : null));
     for (const key of ['steam', 'browse', 'manual', 'remove']) {
-      expect(ids, key).toContain(`gp:abc12345:${key}`);
+      expect(ids(), key).toContain(`gp:abc12345:${key}`);
     }
     // ...and the quick-add buttons still made it, on their own row.
-    QUICK_ADD_GAMES.forEach((_q, i) => expect(ids).toContain(`gp:abc12345:quick${i}`));
+    QUICK_ADD_GAMES.forEach((_q, i) => expect(ids()).toContain(`gp:abc12345:quick${i}`));
+  });
+
+  it('stays within the five action rows Discord allows', () => {
+    expect(rows().length).toBeLessThanOrEqual(5);
   });
 });

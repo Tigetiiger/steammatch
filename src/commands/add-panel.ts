@@ -23,11 +23,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import type {
-  ButtonInteraction,
-  ChatInputCommandInteraction,
-  StringSelectMenuInteraction,
-} from 'discord.js';
+import type { ButtonInteraction, ChatInputCommandInteraction } from 'discord.js';
 import {
   addUserGame,
   guildCatalog,
@@ -54,14 +50,8 @@ export const QUICK_ADD_GAMES: ReadonlyArray<{ name: string; emoji: string }> = [
 const PANEL_IDLE_MS = 120_000;
 const PANEL_TIME_MS = 14 * 60_000;
 /**
- * The select menu's cap, and Discord's: 25 options is all one holds. That is a
- * shortlist of what the server plays most, NOT the catalogue -- the catalogue is
- * reached through "Sirvi kõiki", which paginates and has no such ceiling.
- */
-const CATALOG_LIMIT = 25;
-/**
  * The browse-everything ceiling. The checklist holds its rows in memory and
- * paginates ten to a page, so this bounds the message count, not the screen.
+ * paginates ten to a page, so this bounds the row count, not the screen.
  */
 const BROWSE_LIMIT = 1000;
 
@@ -73,29 +63,18 @@ function counts(ctx: Ctx, userId: string) {
   return { steamCount: all.length - manualCount, manualCount };
 }
 
-/** Exported so a test can hold the row layout to Discord's five-per-row cap. */
-export function panelComponents(sid: string, catalog: { appid: number; name: string; owners: number }[]) {
-  const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
-
-  if (catalog.length > 0) {
-    rows.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`gp:${sid}:pick`)
-          .setPlaceholder('Mängud, mis teistel siin juba on — vali, mida sa mängid')
-          .setMinValues(1)
-          .setMaxValues(Math.min(catalog.length, CATALOG_LIMIT))
-          .addOptions(
-            catalog.slice(0, CATALOG_LIMIT).map((c) => ({
-              label: gameName(c.name, 100),
-              // Estonian uses the adessive for both numbers, so no plural split.
-              description: `${c.owners} inimesel on see olemas`,
-              value: String(c.appid),
-            })),
-          ),
-      ),
-    );
-  }
+/**
+ * Exported so a test can hold the row layout to Discord's five-per-row cap.
+ *
+ * There is deliberately NO select menu here any more. It held 25 options
+ * because that is Discord's cap, which made it a shortlist of the server's
+ * most-owned games wearing the costume of a catalogue -- everything past the
+ * 25th was unreachable, and nothing on screen said so. "Sirvi kõiki mänge"
+ * answers the same question without a ceiling, so the menu was two ways of
+ * doing one thing, the worse one first.
+ */
+export function panelComponents(sid: string) {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 
   // TWO rows, not one. The primary actions used to share a row with the
   // quick-add buttons under a .slice(0, 5), so adding a second entry to
@@ -151,7 +130,10 @@ export async function openAddPanel(
 
   const render = () => {
     const c = counts(ctx, targetId);
-    const catalog = guildCatalog(ctx.db, guildId, targetId, CATALOG_LIMIT);
+    // The full catalogue, because the number on screen now describes what
+    // "Sirvi kõiki mänge" will actually show. While a 25-option menu was the
+    // only way in, this said 25 no matter how many there really were.
+    const catalog = guildCatalog(ctx.db, guildId, targetId, BROWSE_LIMIT);
     return {
       embeds: [
         addPanelEmbed({
@@ -161,7 +143,7 @@ export async function openAddPanel(
           catalogCount: catalog.length,
         }),
       ],
-      components: panelComponents(sid, catalog),
+      components: panelComponents(sid),
     };
   };
 
@@ -182,10 +164,6 @@ export async function openAddPanel(
     const action = i.customId.split(':')[2] ?? '';
 
     try {
-      if (i.isStringSelectMenu() && action === 'pick') {
-        await handlePick(i, ctx, guildId, targetId, render);
-        return;
-      }
       if (!i.isButton()) return;
 
       if (action === 'steam') return handleSteam(i, ctx, targetId, min, render);
@@ -208,24 +186,6 @@ export async function openAddPanel(
     releaseSession(sid);
     void interaction.editReply({ components: [] }).catch(() => {});
   });
-}
-
-async function handlePick(
-  i: StringSelectMenuInteraction,
-  ctx: Ctx,
-  guildId: string,
-  targetId: string,
-  render: () => { embeds: unknown[]; components: unknown[] },
-): Promise<void> {
-  // Only what this panel actually offered. Discord validates select values
-  // against the options it sent, but the catalogue is re-read here anyway so
-  // the guarantee lives in our code rather than in an assumption about theirs.
-  const offered = new Set(guildCatalog(ctx.db, guildId, targetId, CATALOG_LIMIT).map((c) => c.appid));
-  for (const value of i.values) {
-    const appid = Number(value);
-    if (Number.isInteger(appid) && offered.has(appid)) addUserGame(ctx.db, targetId, appid);
-  }
-  await i.update(render() as never);
 }
 
 async function handleSteam(

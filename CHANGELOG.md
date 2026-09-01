@@ -24,8 +24,11 @@ Otsing ei hooli suur- ja väiketähtedest ega täppidest: „pokemon" leiab
 „Pokémon". Sulle ei pakuta mänge, mis sul juba olemas on, ega neid, mille
 omanik on selle peitnud.
 
-Vana 25-mänguline menüü jääb alles — see vastab küsimusele, mida siin serveris
-kõige rohkem mängitakse.
+Vana 25-mänguline valikumenüü on ära võetud. See mahutas 25 mängu, sest rohkem
+Discord ei luba, ja ekraanil ei olnud kuskil kirjas, et ülejäänud on olemas.
+**Sirvi kõiki mänge** vastab samale küsimusele ilma laeta.
+
+Minecrafti kiirnupp jääb alles.
 
 ### Kopeeri pingid — `/games who`
 

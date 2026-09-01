@@ -1000,7 +1000,7 @@ export function addPanelEmbed(v: AddPanelView): EmbedBuilder {
       : `**${num(v.manualCount)}** käsitsi lisatud ${plural(v.manualCount, 'mäng', 'mängu')}. Steami kontot pole ühendatud.`,
     '',
     v.catalogCount > 0
-      ? `Vali **${num(v.catalogCount)}** mängu seast, mis teistel siin juba on, või lisa uus.`
+      ? `**${num(v.catalogCount)}** mängu, mis teistel siin juba on ja sul veel mitte — vaata need üle nupuga **Sirvi kõiki mänge**, või lisa uus.`
       : 'Keegi pole veel mänge lisanud — mille sina lisad, saab teistele ühe klikiga valitavaks.',
   ];
   return new EmbedBuilder()
