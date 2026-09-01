@@ -4,9 +4,10 @@ import { applySchema, openDb } from '../src/db/index.js';
 import {
   addUserGame, ensureUser, findMatches, guildCatalog, leaderboard, linkSteam,
   listGames, removeUserGame, searchGamesForAutocomplete, setOptedIn, sharedGames,
-  touchGuildMember, upsertManualGame, userManualGames, whoOwns,
+  touchGuildMember, unlink, upsertManualGame, userManualGames, whoOwns, forget,
 } from '../src/db/queries.js';
 import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
+import { passesPlaytimeFilter } from '../src/commands/games.js';
 import type { LibraryResult, OwnedGame } from '../src/types.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -173,6 +174,63 @@ describe('removing manual games', () => {
     expect(removeUserGame(db, A, mc)).toBe(true);
     expect(removeUserGame(db, A, mc)).toBe(false);
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([10]);
+  });
+});
+
+describe('the /games list threshold buttons', () => {
+  // The list is pulled once and re-filtered in memory, so this predicate is a
+  // second copy of the SQL rule. It is the copy that had the bug: hand-added
+  // games survived the query and were then dropped by the 30-minute default.
+  const manual = { playtime: 0, tracked: false };
+  const steam = { playtime: 45, tracked: true };
+
+  it('keeps hand-added games at every threshold', () => {
+    for (const min of [-1, 0, 30, 60, 600, 100000]) {
+      expect(passesPlaytimeFilter(manual, min)).toBe(true);
+    }
+  });
+
+  it('still applies the threshold to Steam rows, strictly', () => {
+    expect(passesPlaytimeFilter(steam, 30)).toBe(true);
+    expect(passesPlaytimeFilter(steam, 45)).toBe(false);
+    expect(passesPlaytimeFilter(steam, 60)).toBe(false);
+    expect(passesPlaytimeFilter({ playtime: 0, tracked: true }, -1)).toBe(true);
+  });
+});
+
+describe('unlinking Steam keeps hand-added games', () => {
+  it('/steam unlink drops the Steam library but not the manual one', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid).sort()).toEqual([-1, 10]);
+
+    unlink(db, A);
+
+    expect(db.prepare('SELECT 1 FROM steam_accounts WHERE user_id = ?').get(A)).toBeUndefined();
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([mc]);
+    expect(userManualGames(db, A).map((x) => x.name)).toEqual(['Minecraft']);
+  });
+
+  it('relinking to a different Steam account keeps them too', async () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+
+    const out = linkSteam(db, A, '76561198000000002');
+    expect(out).toEqual({ ok: true, wiped: true });
+
+    // The old account's library is gone; the hand-added game is not.
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([mc]);
+  });
+
+  it('forget me still deletes everything, manual games included', () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    addUserGame(db, A, mc);
+    forget(db, A);
+    expect(listGames(db, A, -1, 50, 0)).toEqual([]);
   });
 });
 

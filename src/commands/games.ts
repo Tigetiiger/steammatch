@@ -258,6 +258,23 @@ async function addSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
   await openAddPanel(interaction, ctx, onBehalf ? target.id : actorId, min);
 }
 
+/**
+ * The in-memory twin of the SQL predicate `(playtime_tracked = 0 OR
+ * playtime_forever > @min)`.
+ *
+ * /games list pulls the whole library once and re-filters it in the process
+ * when a threshold button is pressed, so this rule exists in two places and
+ * they have to agree. An untracked row's 0 means "no playtime known", not
+ * "never played" -- drop the `!tracked` arm and the default 30-minute filter
+ * silently swallows every hand-added game the moment the list renders.
+ */
+export function passesPlaytimeFilter(
+  game: { playtime: Minutes; tracked: boolean },
+  min: Minutes,
+): boolean {
+  return !game.tracked || game.playtime > min;
+}
+
 async function listSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void> {
   const userId = interaction.user.id;
   // Pulled unfiltered so the 30m/1h/5h/10h/All buttons never need another query.
@@ -265,11 +282,15 @@ async function listSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void
   // every 0-minute game and make the "All" button a lie.
   const all = [...listGames(ctx.db, userId, -1, ROW_LIMITS.library, 0)].sort(byPlaytime);
   const link = getLinkInfo(ctx.db, userId);
-  if (link === null) {
-    await interaction.editReply({ embeds: [notLinkedEmbed()] });
-    return;
-  }
+  // Games first, link second. A person can have games without a Steam account:
+  // everything added by hand through the /games add panel. Asking "are you
+  // linked?" before "do you have anything?" told those people they had no
+  // library while the panel was happily storing one.
   if (all.length === 0) {
+    if (link === null) {
+      await interaction.editReply({ embeds: [notLinkedEmbed()] });
+      return;
+    }
     // Linked, but nothing stored: a hidden-playtime profile imports every game
     // at 0 minutes. Telling them to run /games add -- which they just did --
     // is the single most confusing thing the bot could say here.
@@ -289,7 +310,7 @@ async function listSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void
     filter: min,
     pageSize: LIST_PAGE,
     showFilters: true,
-    applyFilter: (rows, m) => rows.filter((g) => g.playtime > m),
+    applyFilter: (rows, m) => rows.filter((g) => passesPlaytimeFilter(g, m)),
     render: (v) =>
       libraryEmbed({
         displayName,

@@ -1,5 +1,6 @@
 /**
- * A paginated, multi-select checklist on one ephemeral message.
+ * A paginated checklist where every game carries its own toggle button, on its
+ * own line. Built with Components V2.
  *
  * Two screens use it and they mean different things by "checked":
  *   - the post-sync import checklist (checked = store this game at all),
@@ -7,31 +8,46 @@
  * The mechanics are identical, so they live here once and the caller supplies
  * the wording.
  *
- * WHY A SELECT MENU PLUS A RENDERED LIST, rather than one or the other:
- * Discord's select menu is the only component that can toggle 25 things in one
- * interaction, but it only shows its selection while the dropdown is open, and
- * only for the current page. So the embed re-renders the boxes as text and the
- * menu is just the input device. Losing either half makes the screen unusable.
+ * WHY 10 PER PAGE, when the old select-menu version fitted 25.
+ * A Components V2 message allows 40 components counting nested ones, and an
+ * inline row costs THREE of them: a Section, the TextDisplay inside it, and the
+ * Button accessory. Navigation costs an ActionRow plus its 5 buttons, and the
+ * header costs one more:
  *
- * The select's `values` are the COMPLETE answer for the page it was rendered
- * from -- an empty array means "nothing on this page", not "no change" -- so a
- * page submit replaces exactly that page's slice of the state and nothing else.
+ *     1 header + 1 container + (10 x 3) + 1 action row + 5 buttons = 38 of 40
+ *
+ * Eleven rows is the arithmetic ceiling (40 exactly, with no Container and so
+ * no accent bar). Twenty is not reachable in this shape at all -- 20 x 3 = 60 --
+ * which is why the page size dropped when the checkmark moved onto the line.
+ *
+ * WHY THIS IS A FOLLOW-UP MESSAGE rather than the deferred reply.
+ * IS_COMPONENTS_V2 must be set when a message is CREATED; it cannot be added by
+ * editing, and it cannot be removed once set. The callers defer before talking
+ * to Steam (they have to -- 3 seconds), and that deferred reply has to stay a
+ * normal message: it is where the "private profile" embeds and the final import
+ * summary go. So the instructions stay on the parent reply and the interactive
+ * list arrives beside it as its own ephemeral follow-up.
  */
 
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ComponentType,
+  ContainerBuilder,
   MessageFlags,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
+  SectionBuilder,
+  TextDisplayBuilder,
 } from 'discord.js';
-import type { EmbedBuilder, RepliableInteraction } from 'discord.js';
-import { checklistEmbed } from './embeds.js';
+import type { Message, RepliableInteraction } from 'discord.js';
+import { COLORS, checklistHeaderText, checklistRowText, noticeEmbed } from './embeds.js';
 import { claimSessionId, releaseSession } from './paginate.js';
 
-/** Discord's hard cap on options in one select menu, and so our page size. */
-export const CHECKLIST_PAGE = 25;
+/**
+ * Rows per page. Not a style choice -- see the component arithmetic above.
+ * Raising it past 11 produces a message Discord rejects outright.
+ */
+export const CHECKLIST_PAGE = 10;
 
 const COLLECTOR_IDLE_MS = 180_000;
 const COLLECTOR_TIME_MS = 14 * 60_000;
@@ -40,7 +56,7 @@ export interface ChecklistItem {
   /** Stable key. Appids are numbers everywhere else; they are stringified here. */
   id: string;
   label: string;
-  /** Shown in the dropdown row and after the name in the list, e.g. a playtime. */
+  /** Shown after the name on the row, e.g. a playtime. */
   note?: string;
 }
 
@@ -66,12 +82,122 @@ export type ChecklistResult =
 
 const CANCELLED: ChecklistResult = { saved: false, checked: null };
 
+/** Everything the screen needs to draw itself. Exported so a test can count it. */
+export interface ChecklistViewState {
+  sid: string;
+  items: readonly ChecklistItem[];
+  checked: ReadonlySet<string>;
+  page: number;
+  title: string;
+  checkedMeans: string;
+  uncheckedMeans: string;
+  saveLabel: string;
+}
+
+/**
+ * The message body: a header, a Container of one Section per game, and one row
+ * of navigation.
+ *
+ * Exported for the component-budget test. Nothing else should call it -- the
+ * arithmetic in this file's header comment is only true for what it builds.
+ */
+export function checklistComponents(v: ChecklistViewState): unknown[] {
+  const pages = Math.max(1, Math.ceil(v.items.length / CHECKLIST_PAGE));
+  const page = Math.min(Math.max(0, v.page), pages - 1);
+  const offset = page * CHECKLIST_PAGE;
+  const rows = v.items.slice(offset, offset + CHECKLIST_PAGE);
+
+  const header = new TextDisplayBuilder().setContent(
+    `## ${v.title}\n${checklistHeaderText({
+      title: v.title,
+      intro: '',
+      pageRows: [],
+      offset,
+      page,
+      pages,
+      checked: v.checked.size,
+      total: v.items.length,
+      checkedMeans: v.checkedMeans,
+      uncheckedMeans: v.uncheckedMeans,
+    })}`,
+  );
+
+  const container = new ContainerBuilder().setAccentColor(COLORS.brand);
+  rows.forEach((it, i) => {
+    const on = v.checked.has(it.id);
+    container.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            checklistRowText(
+              { label: it.label, checked: on, ...(it.note === undefined ? {} : { note: it.note }) },
+              offset + i + 1,
+            ),
+          ),
+        )
+        // The accessory is what makes the checkmark clickable in place. One
+        // button per Section is the API's limit, which is also why a page
+        // cannot be toggled in a single interaction the way the select menu
+        // did it -- see "Märgi kõik" below, which is the compensation.
+        .setButtonAccessory(
+          new ButtonBuilder()
+            .setCustomId(`cl:${v.sid}:t:${it.id}`)
+            .setLabel(on ? '☑' : '☐')
+            .setStyle(on ? ButtonStyle.Primary : ButtonStyle.Secondary),
+        ),
+    );
+  });
+
+  // Exactly five, which is the row's cap. The page counter that used to have
+  // its own button lives in the header text now, and "Märgi kõik"/"Eemalda
+  // kõik" are one button whose meaning flips -- there is no sixth slot.
+  const allChecked = v.checked.size >= v.items.length;
+  const nav = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`cl:${v.sid}:prev`)
+      .setLabel('◀')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0),
+    new ButtonBuilder()
+      .setCustomId(`cl:${v.sid}:next`)
+      .setLabel('▶')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page >= pages - 1),
+    new ButtonBuilder()
+      .setCustomId(`cl:${v.sid}:${allChecked ? 'none' : 'all'}`)
+      .setLabel(allChecked ? 'Eemalda kõik' : 'Märgi kõik')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`cl:${v.sid}:save`)
+      .setLabel(v.saveLabel)
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`cl:${v.sid}:cancel`)
+      .setLabel('Katkesta')
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  return [header, container, nav];
+}
+
+/** Counts a built tree the way Discord does: every nested component included. */
+export function countComponents(tree: readonly unknown[]): number {
+  const one = (c: unknown): number => {
+    const json = (c as { toJSON?: () => unknown }).toJSON?.() ?? c;
+    const node = json as { components?: unknown[]; accessory?: unknown };
+    let n = 1;
+    for (const child of node.components ?? []) n += one(child);
+    if (node.accessory) n += one(node.accessory);
+    return n;
+  };
+  return tree.reduce<number>((sum, c) => sum + one(c), 0);
+}
+
 /**
  * Show the checklist and resolve once the user saves, cancels or walks away.
  *
- * Resolves rather than throwing on every non-save outcome, because "the user
- * closed it" and "the timer expired" must both leave the database untouched --
- * and a caller that has to distinguish them would only get that wrong.
+ * Never rejects. A user who closes Discord mid-list is a timeout, which is a
+ * cancel, which changes nothing.
  */
 export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistResult> {
   const items = opts.items;
@@ -88,119 +214,49 @@ export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistRes
   const pages = Math.max(1, Math.ceil(items.length / CHECKLIST_PAGE));
   let page = 0;
 
-  const pageItems = (): readonly ChecklistItem[] => {
-    const offset = page * CHECKLIST_PAGE;
-    return items.slice(offset, offset + CHECKLIST_PAGE);
-  };
+  const pageItems = (): readonly ChecklistItem[] =>
+    items.slice(page * CHECKLIST_PAGE, page * CHECKLIST_PAGE + CHECKLIST_PAGE);
 
-  const embed = (): EmbedBuilder => {
-    const rows = pageItems();
-    return checklistEmbed({
-      title: opts.title,
-      intro: opts.intro,
-      pageRows: rows.map((it) => ({
-        label: it.label,
-        checked: checked.has(it.id),
-        ...(it.note === undefined ? {} : { note: it.note }),
-      })),
-      offset: page * CHECKLIST_PAGE,
-      page,
-      pages,
-      checked: checked.size,
-      total: items.length,
-      checkedMeans: opts.checkedMeans,
-      uncheckedMeans: opts.uncheckedMeans,
-    });
-  };
+  const view = (): ChecklistViewState => ({
+    sid,
+    items,
+    checked,
+    page,
+    title: opts.title,
+    checkedMeans: opts.checkedMeans,
+    uncheckedMeans: opts.uncheckedMeans,
+    saveLabel: opts.saveLabel ?? 'Salvesta',
+  });
 
-  const components = (): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] => {
-    const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
-    const current = pageItems();
+  // The instructions stay on the parent reply, which is a normal message and
+  // can hold an embed. The list itself cannot share it -- see the file header.
+  await opts.interaction.editReply({
+    embeds: [noticeEmbed(opts.title, opts.intro, COLORS.brand)],
+    components: [],
+  });
 
-    rows.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`cl:${sid}:sel`)
-          .setPlaceholder(
-            pages > 1
-              ? `Märgi, mida soovid — lk ${page + 1}/${pages}`
-              : 'Märgi, mida soovid alles jätta',
-          )
-          // 0, not 1: unchecking every game on a page is a legitimate answer,
-          // and a minimum of 1 would make it impossible to express.
-          .setMinValues(0)
-          .setMaxValues(current.length)
-          .addOptions(
-            current.map((it) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(clip(it.label, 100))
-                .setValue(it.id)
-                .setDefault(checked.has(it.id))
-                .setDescription(clip(it.note ?? ' ', 100)),
-            ),
-          ),
-      ),
-    );
+  const payload = () =>
+    ({ components: checklistComponents(view()) }) as unknown as { components: [] };
 
-    if (pages > 1) {
-      rows.push(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`cl:${sid}:prev`)
-            .setLabel('◀')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(page === 0),
-          new ButtonBuilder()
-            .setCustomId(`cl:${sid}:noop`)
-            .setLabel(`${page + 1} / ${pages}`)
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId(`cl:${sid}:next`)
-            .setLabel('▶')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(page >= pages - 1),
-        ),
-      );
-    }
-
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        // Whole-list, not per-page: the select menu already does a page in one
-        // gesture, so page-scoped buttons would add nothing it cannot express.
-        new ButtonBuilder()
-          .setCustomId(`cl:${sid}:all`)
-          .setLabel('Märgi kõik')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`cl:${sid}:none`)
-          .setLabel('Eemalda kõik')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`cl:${sid}:save`)
-          .setLabel(opts.saveLabel ?? 'Salvesta')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`cl:${sid}:cancel`)
-          .setLabel('Katkesta')
-          .setStyle(ButtonStyle.Danger),
-      ),
-    );
-
-    return rows;
-  };
-
-  const payload = () => ({ embeds: [embed()], components: components() });
-
-  const message = await opts.interaction.editReply(payload());
+  const message = (await opts.interaction.followUp({
+    ...payload(),
+    flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+  })) as Message;
 
   return await new Promise<ChecklistResult>((resolve) => {
     let outcome: ChecklistResult = CANCELLED;
+    let closedWith: string | null = null;
 
     const collector = message.createMessageComponentCollector({
+      componentType: ComponentType.Button,
       idle: COLLECTOR_IDLE_MS,
       time: COLLECTOR_TIME_MS,
     });
+
+    const finish = (text: string) =>
+      ({
+        components: [new TextDisplayBuilder().setContent(text)],
+      }) as unknown as { components: [] };
 
     collector.on('collect', (i) => {
       void (async () => {
@@ -219,17 +275,20 @@ export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistRes
           if ((parts[1] ?? '') !== sid) return;
           const action = parts[2] ?? '';
 
-          if (i.isStringSelectMenu() && action === 'sel') {
-            // The page's slice is replaced wholesale by the submitted values.
-            const chosen = new Set(i.values);
-            for (const it of pageItems()) {
-              if (chosen.has(it.id)) checked.add(it.id);
-              else checked.delete(it.id);
+          // A per-row toggle. The id is everything after the marker, because a
+          // manual game's appid is NEGATIVE and splitting on ':' must not lose
+          // the sign or the digits after it.
+          if (action === 't') {
+            const id = parts.slice(3).join(':');
+            if (!present.has(id)) {
+              await i.deferUpdate();
+              return;
             }
+            if (checked.has(id)) checked.delete(id);
+            else checked.add(id);
             await i.update(payload());
             return;
           }
-          if (!i.isButton()) return;
 
           switch (action) {
             case 'prev':
@@ -238,24 +297,24 @@ export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistRes
             case 'next':
               page = Math.min(pages - 1, page + 1);
               break;
+            // Whole-list, not this page: the button replaces a select menu that
+            // could tick 25 at once, so scoping it to ten would be a downgrade
+            // on top of a downgrade.
             case 'all':
               for (const it of items) checked.add(it.id);
               break;
             case 'none':
               checked.clear();
               break;
-            // Both of these ack BEFORE stopping. The caller replaces this
-            // message with its own result screen via editReply, which does not
-            // acknowledge the button -- so without the deferUpdate the person
-            // who clicked Save gets a red "interaction failed" next to a
-            // screen that did, in fact, work.
             case 'save':
-              await i.deferUpdate();
+              closedWith = 'saved';
+              await i.update(finish('Valik salvestatud.'));
               outcome = { saved: true, checked: new Set(checked) };
               collector.stop('saved');
               return;
             case 'cancel':
-              await i.deferUpdate();
+              closedWith = 'cancelled';
+              await i.update(finish('Midagi ei muudetud.'));
               outcome = CANCELLED;
               collector.stop('cancelled');
               return;
@@ -272,16 +331,15 @@ export async function runChecklist(opts: ChecklistOptions): Promise<ChecklistRes
 
     collector.on('end', () => {
       releaseSession(sid);
-      // The caller replaces this message with its own result screen, so the
-      // components are cleared but the embed is deliberately left in place.
+      // Only for a timeout. Save and cancel already replaced the message from
+      // inside the interaction that caused them, and re-editing here would
+      // overwrite their wording with an expiry notice.
+      if (closedWith === null) {
+        void opts.interaction.webhook
+          .editMessage(message.id, finish('Nimekiri aegus. Käivita käsk uuesti.'))
+          .catch(() => {});
+      }
       resolve(outcome);
     });
   });
-}
-
-/** Select-menu labels and descriptions have hard caps and reject empty strings. */
-function clip(s: string, max: number): string {
-  const t = String(s ?? '').trim();
-  if (t.length === 0) return '—';
-  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }

@@ -58,7 +58,7 @@ global commands are eventually consistent. Leave it unset to deploy globally.
 | `/games add [user]` | **The panel.** Sync a Steam library, claim games other people here already added, add any other game, or quick-add Minecraft. `user` does it **for someone else** (needs Manage Server) |
 | `/steam update` | Re-read the profile and go through the import checklist again (15-minute cooldown) |
 | `/steam change` | Checklist of your games — untick the ones other people should not see |
-| `/steam unlink` | Delete the Steam link and all stored playtime |
+| `/steam unlink` | Delete the Steam link and everything imported from it. Hand-added games stay — they never came from Steam |
 
 All user-facing copy lives in `src/ui/embeds.ts`; that is the file to open to change wording.
 | `/games list [min_playtime] [public]` | Your library, filterable and paginated |
@@ -98,7 +98,11 @@ To add another quick-add button, append to `QUICK_ADD_GAMES` in
 Two separate decisions, deliberately kept apart:
 
 **The import checklist** runs after every Steam read and before anything is written. It lists
-every game Steam returned, most-played first, 25 to a page, all ticked. Untick a game and it
+every game Steam returned, most-played first, **10 to a page**, all ticked, each with its own
+toggle button on its own line. Ten, not twenty-five, is a hard Discord limit and not a taste
+call: a Components V2 message allows 40 components counting nested ones, and an inline row
+costs three of them (Section + TextDisplay + Button). Eleven is the ceiling; the budget is
+pinned by a test. Untick a game and it
 is **never written to the database at all** — not the playtime, not the row. The unticked
 appids are kept in `excluded_games`, and `syncLibrary` reads that table *itself* rather than
 taking a filter from its caller, so a future call site cannot silently re-import something the
@@ -182,8 +186,11 @@ working panel stops working.
 - **Three hide levels.** Globally undiscoverable (`/privacy`), hidden in one specific server
   (`/privacy`), or hidden game-by-game (`/steam change`). Your own `/games list` keeps working
   in all three cases.
-- `/steam unlink` removes the link, all playtime and the exclusion list; `/privacy → forget me`
-  also drops guild membership rows.
+- `/steam unlink` removes the link, the imported library, the playtime and the exclusion list.
+  It deliberately keeps **hand-added games**, which did not come from Steam, and only opts the
+  person out if nothing survived — otherwise the surviving rows would be stored and invisible,
+  which is the same disappearance one layer down. `/privacy → forget me` is the unconditional
+  one: it deletes everything, manual games included, and drops guild membership rows.
 - A raw SteamID64 is never shown in server-visible output.
 
 **Known limitation:** anyone can type anyone else's public Steam ID. Real ownership proof

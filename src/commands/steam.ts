@@ -20,6 +20,7 @@ import {
   getExcludedAppids,
   linkSteam,
   listAllUserGames,
+  listGames,
   setExcludedGames,
   setHiddenGames,
   setOptedIn,
@@ -64,7 +65,7 @@ const data = new SlashCommandBuilder()
     s.setName('change').setDescription('Vali, milliseid su mänge teised siin näevad'),
   )
   .addSubcommand((s) =>
-    s.setName('unlink').setDescription('Kustuta Steami ühendus, mängud ja mänguaeg'),
+    s.setName('unlink').setDescription('Kustuta Steami ühendus ja sealt toodud mängud'),
   );
 
 /* -------------------------------------------------------------------------- */
@@ -416,13 +417,22 @@ async function unlinkSub(
   userId: string,
 ): Promise<void> {
   unlink(ctx.db, userId);
-  setOptedIn(ctx.db, userId, false);
   clearConsent(userId);
+
+  // unlink() keeps hand-added games -- they never came from Steam. So opting
+  // the person out is only right when nothing survived: doing it unconditionally
+  // would leave their Minecraft row in the database and hide it from everyone,
+  // which is the same disappearance the delete used to cause, one layer down.
+  const left = listGames(ctx.db, userId, -1, 1, 0).length;
+  if (left === 0) setOptedIn(ctx.db, userId, false);
+
   await interaction.editReply({
     embeds: [
       noticeEmbed(
         'Ühendus kustutatud',
-        'Su Steam ID, mängud ja mänguaeg on kustutatud. Sa ei ilmu enam kellegi tulemustes.\n\nUuesti alustamiseks: **/games add**',
+        left === 0
+          ? 'Su Steam ID, mängud ja mänguaeg on kustutatud. Sa ei ilmu enam kellegi tulemustes.\n\nUuesti alustamiseks: **/games add**'
+          : 'Su Steam ID, Steamist toodud mängud ja mänguaeg on kustutatud.\n\nKäsitsi lisatud mängud jäid alles — need ei tulnud Steamist. Neid näed **/games list** all ja eemaldad **/games add** paneelilt. Täielikuks kustutamiseks: **/privacy**.',
         COLORS.ok,
       ),
     ],

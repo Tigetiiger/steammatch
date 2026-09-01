@@ -39,6 +39,12 @@ export const LIMITS = {
   buttonLabel: 80,
   choiceName: 100,
   choiceValue: 100,
+  /** A single Components V2 text display. The whole message caps at 4000. */
+  textDisplay: 4000,
+  /** Components V2: total components in one message, counting nested ones. */
+  componentsV2: 40,
+  /** Components V2: children one Container may hold. */
+  containerChildren: 10,
 } as const;
 
 export const COLORS = {
@@ -900,35 +906,33 @@ export interface ChecklistView {
  * selection state only while the menu is open, so without an explicit rendered
  * list the user cannot see what they have checked on any page but this one.
  */
-export function checklistEmbed(v: ChecklistView): EmbedBuilder {
-  const lines = v.pageRows.map(
-    (r, i) =>
-      `${r.checked ? '☑' : '☐'} ${rank(v.offset + i + 1)} ${
-        r.checked ? `**${gameName(r.label)}**` : gameName(r.label)
-      }${r.note ? ` · ${r.note}` : ''}`,
-  );
-  const header =
-    `**${num(v.checked)}** / **${num(v.total)}** valitud` +
-    (v.pages > 1 ? ` · näitan ${num(v.offset + 1)}–${num(v.offset + v.pageRows.length)}` : '');
+/**
+ * The header line above the list: how many are ticked, which page, and what a
+ * tick MEANS on this particular screen -- import, or visibility. Both callers
+ * reuse the same widget, so the legend cannot be hardcoded.
+ */
+export function checklistHeaderText(v: ChecklistView): string {
+  const counts = `**${num(v.checked)}** / **${num(v.total)}** valitud`;
+  const where = v.pages > 1 ? ` · lk ${v.page + 1}/${v.pages}` : '';
+  return `${counts}${where}\n-# linnuke = ${v.checkedMeans} · ilma = ${v.uncheckedMeans}`;
+}
 
-  return new EmbedBuilder()
-    .setColor(COLORS.brand)
-    .setTitle(truncate(v.title, LIMITS.title))
-    .setDescription(
-      joinLines([
-        v.intro,
-        '',
-        header,
-        '',
-        ...(lines.length > 0 ? lines : ['*Pole midagi näidata.*']),
-      ]),
-    )
-    .setFooter({
-      text: truncate(
-        `Lk ${v.page + 1}/${v.pages} · linnuke = ${v.checkedMeans} · ilma = ${v.uncheckedMeans}`,
-        LIMITS.footer,
-      ),
-    });
+/**
+ * One game's line, which sits beside its own toggle button.
+ *
+ * The box character is still printed even though the button carries one too:
+ * the button renders to the right of the text and, on a narrow client, well
+ * away from it. Bold plus a box on the line itself is what makes a page
+ * scannable without tracing across to the accessory.
+ */
+export function checklistRowText(
+  row: { label: string; checked: boolean; note?: string },
+  index: number,
+): string {
+  const box = row.checked ? '☑' : '☐';
+  const name = row.checked ? `**${gameName(row.label)}**` : gameName(row.label);
+  const note = row.note ? ` · ${row.note}` : '';
+  return truncate(`${box} ${rank(index)} ${name}${note}`, LIMITS.textDisplay);
 }
 
 /* --- /games add panel ------------------------------------------------------ */

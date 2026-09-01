@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamMatch — checklist options</title>
+<style>
+  :root{
+    --server-bg:#1e1f22; --side-bg:#2b2d31; --chat-bg:#313338; --embed-bg:#2b2d31;
+    --text:#dbdee1; --text-bright:#f2f3f5; --text-muted:#949ba4;
+    --link:#00a8fc; --blurple:#5865f2; --btn-secondary:#4e5058;
+    --btn-success:#248046; --btn-danger:#da373c; --divider:#3f4147;
+    --steam-blue:#66c0f4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#202225;color:var(--text);
+    font-family:"gg sans","Noto Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:16px;line-height:1.375}
+  .note{max-width:1180px;margin:24px auto 16px;padding:14px 18px;background:#2b2d31;
+    border-left:4px solid var(--steam-blue);border-radius:6px;color:var(--text-muted);font-size:14px}
+  .note b{color:var(--text-bright)}
+  .note code{background:#1e1f22;padding:1px 5px;border-radius:3px;color:var(--steam-blue);font-size:13px}
+  .app{max-width:1180px;margin:0 auto 40px;display:grid;grid-template-columns:72px 240px 1fr;
+    border-radius:8px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .rail{background:var(--server-bg);padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .server{width:48px;height:48px;border-radius:16px;background:var(--blurple);display:flex;
+    align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:15px}
+  .server.alt{background:#4e5058;border-radius:50%}
+  .side{background:var(--side-bg)}
+  .side h2{margin:0;padding:16px;font-size:15px;color:var(--text-bright);
+    border-bottom:1px solid rgba(0,0,0,.25);box-shadow:0 1px 0 rgba(0,0,0,.2)}
+  .chan{padding:6px 10px;margin:2px 8px;border-radius:4px;color:var(--text-muted);font-size:15px}
+  .chan.active{background:#404249;color:var(--text-bright)}
+  .chan::before{content:"# ";opacity:.6}
+  .side .label{padding:16px 16px 4px;font-size:11px;text-transform:uppercase;
+    letter-spacing:.02em;color:var(--text-muted);font-weight:700}
+  .chat{background:var(--chat-bg);min-width:0}
+  .chat-header{padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.2);color:var(--text-bright);
+    font-weight:600;font-size:15px;box-shadow:0 1px 0 rgba(0,0,0,.2);position:relative;z-index:2}
+  .chat-header span{color:var(--text-muted);font-weight:400;margin-left:8px;font-size:13px}
+  .messages{padding:16px 16px 32px}
+  .screen-label{margin:34px 0 10px;padding:6px 12px;border-left:3px solid var(--steam-blue);
+    color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+    font-weight:700;background:rgba(102,192,244,.06)}
+  .screen-label:first-child{margin-top:0}
+  .screen-label b{color:var(--text-bright)}
+  .msg{display:flex;gap:16px;padding:8px 0}
+  .avatar{width:40px;height:40px;border-radius:50%;flex:0 0 40px;background:var(--blurple);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:600}
+  .avatar.bot{background:linear-gradient(135deg,#1b2838,#66c0f4)}
+  .msg-body{min-width:0;flex:1}
+  .msg-head{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .author{color:var(--text-bright);font-weight:500;font-size:16px}
+  .tag{background:var(--blurple);color:#fff;font-size:10px;font-weight:600;padding:1px 4px;
+    border-radius:3px;text-transform:uppercase}
+  .ts{color:var(--text-muted);font-size:12px}
+
+  /* embed (variants A + B) */
+  .embed{background:var(--embed-bg);border-left:4px solid var(--steam-blue);border-radius:4px;
+    padding:12px 16px 14px;max-width:540px;margin-top:4px}
+  .embed-title{color:var(--text-bright);font-weight:600;font-size:16px;margin-bottom:8px}
+  .embed-desc{font-size:14px;color:var(--text)}
+  .embed-footer{margin-top:10px;color:var(--text-muted);font-size:12px;
+    border-top:0;padding-top:2px}
+  .intro{color:var(--text);margin-bottom:10px}
+  .count{color:var(--text-muted);margin-bottom:8px}
+  .count b{color:var(--text-bright)}
+  .clines{font-size:14px}
+  .cline{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cline .bx{display:inline-block;width:1.1em}
+  .cline .rk{font-family:Consolas,"Courier New",monospace;background:#1e1f22;border-radius:3px;
+    padding:0 4px;color:var(--text-muted);font-size:12.5px}
+  .cline .nm{color:var(--text)}
+  .cline.on .nm{color:var(--text-bright);font-weight:600}
+  .cline .note{color:var(--text-muted);font-size:13px}
+
+  /* components v2 (variant C) */
+  .cv2{max-width:540px;margin-top:4px}
+  .cv2 .td{font-size:14px;color:var(--text);margin:2px 0 8px}
+  .cv2 .container{background:var(--embed-bg);border-left:4px solid var(--steam-blue);
+    border-radius:4px;padding:6px 10px 8px}
+  .cv2 .section{display:flex;align-items:center;gap:10px;padding:5px 4px;
+    border-bottom:1px solid rgba(255,255,255,.04)}
+  .cv2 .section:last-child{border-bottom:0}
+  .cv2 .section .txt{flex:1;min-width:0;font-size:14px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .cv2 .section .txt b{color:var(--text-bright)}
+  .cv2 .section .txt .note{color:var(--text-muted);font-size:13px}
+
+  /* buttons */
+  .rowbtns{display:flex;gap:8px;margin-top:8px;flex-wrap:nowrap}
+  .btn{background:var(--btn-secondary);color:#fff;border:0;border-radius:3px;padding:8px 14px;
+    font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;min-width:60px}
+  .btn:hover:not(:disabled){filter:brightness(1.15)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.primary{background:var(--blurple)}
+  .btn.success{background:var(--btn-success)}
+  .btn.danger{background:var(--btn-danger)}
+  .btn.grid{min-width:0;flex:1;padding:8px 4px;font-variant-numeric:tabular-nums}
+  .btn.acc{min-width:0;padding:6px 12px;flex:0 0 auto}
+  .btn.on{background:var(--blurple)}
+
+  /* select menu mock */
+  .sel{max-width:540px;margin-top:8px;background:#1e1f22;border-radius:4px;
+    padding:9px 12px;color:var(--text-muted);font-size:14px;cursor:pointer;
+    display:flex;align-items:center;justify-content:space-between}
+  .sel:hover{background:#232428}
+  .sel .chev{color:var(--text-muted)}
+  .dropdown{max-width:540px;background:#1e1f22;border-radius:4px;margin-top:4px;
+    max-height:300px;overflow:auto;box-shadow:0 8px 16px rgba(0,0,0,.5)}
+  .dropdown.hidden{display:none}
+  .opt{display:flex;align-items:center;gap:10px;padding:7px 12px;font-size:14px;cursor:pointer}
+  .opt:hover{background:#2b2d31}
+  .opt .ck{width:18px;height:18px;border-radius:3px;border:1px solid #6d6f78;flex:0 0 18px;
+    display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff}
+  .opt.on .ck{background:var(--blurple);border-color:var(--blurple)}
+  .opt .ol{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-bright)}
+  .opt .od{color:var(--text-muted);font-size:12px}
+  .dd-foot{padding:8px 12px;border-top:1px solid #2b2d31;display:flex;gap:8px;justify-content:flex-end}
+
+  .eph{color:var(--text-muted);font-size:12px;margin-top:8px}
+  .eph::before{content:"👁 ";}
+
+  /* budget meter */
+  .meter{max-width:540px;margin-top:10px;background:#232428;border-radius:6px;padding:10px 12px;
+    font-size:12.5px;color:var(--text-muted);border-left:3px solid #4e5058}
+  .meter b{color:var(--text-bright)}
+  .meter .ok{color:#3ba55d}
+  .meter .warn{color:#faa61a}
+  .meter .row2{margin-top:4px}
+  .meter kbd{background:#1e1f22;border-radius:3px;padding:1px 5px;color:var(--steam-blue);
+    font-family:inherit;font-size:12px}
+
+  table.cmp{max-width:1180px;margin:0 auto 60px;width:100%;border-collapse:collapse;
+    background:#2b2d31;border-radius:8px;overflow:hidden;font-size:13.5px}
+  table.cmp th,table.cmp td{padding:10px 14px;text-align:left;border-bottom:1px solid #1e1f22;
+    vertical-align:top}
+  table.cmp th{background:#232428;color:var(--text-bright);font-size:12px;
+    text-transform:uppercase;letter-spacing:.04em}
+  table.cmp td:first-child{color:var(--text-bright);font-weight:600;white-space:nowrap}
+  table.cmp tr:last-child td{border-bottom:0}
+  table.cmp .good{color:#3ba55d}
+  table.cmp .bad{color:#ed4245}
+  table.cmp .mid{color:#faa61a}
+</style>
+</head>
+<body>
+
+<div class="note">
+  <b>Checklist — three ways to draw it.</b> Same fake 412-game library in all three, same Estonian copy the bot
+  actually uses. Everything is clickable: tick, untick, page. Each screen carries a live
+  <b>component budget</b> and a <b>round-trip counter</b> — every interaction with Discord is one network
+  round trip and one re-render, which is the thing the three options really trade against each other.
+  <br><br>
+  The hard limits being respected: classic components allow <code>5 rows × 5 buttons</code> and a select menu
+  eats a whole row on its own; Components&nbsp;V2 allows <code>40 components</code> counting nested ones, and a
+  <code>Container</code> holds <code>10</code> children. <b>25 clickable checkmarks plus navigation does not fit in
+  either system</b> — that is the constraint that forces a choice below.
+</div>
+
+<div class="app">
+  <div class="rail"><div class="server">GG</div><div class="server alt">+</div></div>
+  <div class="side">
+    <h2>Gaming Buddies</h2>
+    <div class="label">Text channels</div>
+    <div class="chan">general</div>
+    <div class="chan active">steam-match</div>
+    <div class="chan">lfg</div>
+  </div>
+  <div class="chat">
+    <div class="chat-header"># steam-match <span>Vali, mida importida</span></div>
+    <div class="messages">
+
+      <div class="screen-label">A · <b>Today</b> — select menu + rendered list · 25 per page</div>
+      <div class="msg">
+        <div class="avatar bot">SM</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">bot</span><span class="ts">Today at 14:03</span></div>
+          <div id="A"></div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+      <div class="screen-label">B · button grid · 20 per page · keeps the embed</div>
+      <div class="msg">
+        <div class="avatar bot">SM</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">bot</span><span class="ts">Today at 14:03</span></div>
+          <div id="B"></div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+      <div class="screen-label">C · Components V2 · checkmark on the game's own line · 10 per page</div>
+      <div class="msg">
+        <div class="avatar bot">SM</div>
+        <div class="msg-body">
+          <div class="msg-head"><span class="author">SteamMatch</span><span class="tag">bot</span><span class="ts">Today at 14:03</span></div>
+          <div id="C"></div>
+          <div class="eph">Only you can see this</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<table class="cmp">
+  <tr><th>&nbsp;</th><th>A — select menu (today)</th><th>B — button grid</th><th>C — Components V2</th></tr>
+  <tr><td>Games per page</td><td class="good">25</td><td class="mid">20</td><td class="bad">10</td></tr>
+  <tr><td>Pages for 412 games</td><td class="good">17</td><td class="mid">21</td><td class="bad">42</td></tr>
+  <tr><td>Checkmark position</td>
+      <td class="bad">in the dropdown, visible only while it is open</td>
+      <td class="mid">in a numbered grid under the list — adjacent by number, not by line</td>
+      <td class="good">on the game's own line, exactly as pictured</td></tr>
+  <tr><td>Untick 8 games</td>
+      <td class="good">1 round trip (open, tick 8, submit)</td>
+      <td class="bad">8 round trips, one re-render each</td>
+      <td class="bad">8 round trips, one re-render each</td></tr>
+  <tr><td>Untick 1 game</td><td class="mid">1 round trip, 3 gestures</td><td class="good">1 click</td><td class="good">1 click</td></tr>
+  <tr><td>Mobile</td>
+      <td class="good">native multi-select sheet, full-width labels</td>
+      <td class="mid">20 small numbered buttons, 5 to a row — cramped</td>
+      <td class="good">one full-width line per game</td></tr>
+  <tr><td>Component budget</td>
+      <td class="good">11 of 25 buttons, 3 of 5 rows</td>
+      <td class="bad">25 of 25 buttons, 5 of 5 rows — completely full, nothing can ever be added</td>
+      <td class="mid">37 of 40 components</td></tr>
+  <tr><td>Keeps the embed?</td><td class="good">yes</td><td class="good">yes</td>
+      <td class="bad">no — Components V2 is mutually exclusive with embeds, so <code>checklistEmbed()</code> is rewritten as text components</td></tr>
+  <tr><td>Page indicator</td><td class="good">its own nav row</td>
+      <td class="bad">no room for one — has to move into the embed footer</td>
+      <td class="good">header text component</td></tr>
+  <tr><td>Code touched</td>
+      <td>—</td>
+      <td>only <code>src/ui/checklist.ts</code></td>
+      <td><code>checklist.ts</code> + <code>checklistEmbed()</code> in <code>embeds.ts</code> + the collector's payload shape</td></tr>
+</table>
+
+<script>
+/* ---- fake library: 412 games, first 42 named ---------------------------- */
+const NAMES = [
+  ["Counter-Strike 2",74400],["Factorio",24720],["Dota 2",23280],["Team Fortress 2",12300],
+  ["Rust",9840],["Terraria",8880],["Stardew Valley",7620],["Rimworld",7080],
+  ["Cyberpunk 2077",6600],["Elden Ring",6240],["Hades",5460],["Deep Rock Galactic",5100],
+  ["Baldur's Gate 3",4980],["The Witcher 3: Wild Hunt",4620],["Portal 2",3900],
+  ["Left 4 Dead 2",3660],["Garry's Mod",3420],["Project Zomboid",3180],
+  ["Kerbal Space Program",2940],["Satisfactory",2700],["Valheim",2460],
+  ["Slay the Spire",2220],["Hollow Knight",1980],["Dead Cells",1740],
+  ["Risk of Rain 2",1500],["Vampire Survivors",1260],["Subnautica",1140],
+  ["Half-Life 2",1020],["Cities: Skylines",900],["Don't Starve Together",780],
+  ["Euro Truck Simulator 2",660],["No Man's Sky",540],["Outer Wilds",420],
+  ["Disco Elysium",300],["Celeste",240],["Undertale",180],["Papers, Please",120],
+  ["Superhot",90],["Inside",60],["Firewatch",45],["Gris",31],["A Short Hike",18],
+];
+const TOTAL = 412;
+const GAMES = NAMES.map((g,i)=>({id:i,name:g[0],mins:g[1]}));
+/* the rest of the 412 exist only as a count; they live on later pages */
+
+/* ---- Estonian formatting, mirroring embeds.ts --------------------------- */
+const num = n => n.toLocaleString('et-EE').replace(/\u00a0/g,' ');
+function fmtMinutes(m){
+  if(m<60) return m+' min';
+  const h=m/60;
+  return h>=100 ? num(Math.round(h))+' h' : h.toFixed(1).replace('.',',')+' h';
+}
+const noteOf = g => g.mins>0 ? 'mängitud '+fmtMinutes(g.mins) : '';
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+const INTRO = 'Eemalda linnuke mängudelt, mida sa ei taha salvestada. Neid ei salvestata ja need jäävad valimata ka järgmisel <b>/steam update</b> korral.';
+const TITLE = 'Vali, mida importida';
+const FOOT  = 'linnuke = salvestatakse · ilma = jäetakse vahele';
+
+/* ---- state, one per variant --------------------------------------------- */
+function newState(pageSize){
+  return {page:0, size:pageSize, off:new Set(), trips:0, open:false,
+          draft:null /* variant A: pending dropdown selection */};
+}
+const S = {A:newState(25), B:newState(20), C:newState(10)};
+const pagesOf = s => Math.ceil(TOTAL/s.size);
+function pageRows(s){
+  const start=s.page*s.size;
+  const out=[];
+  for(let i=start;i<start+s.size && i<TOTAL;i++){
+    out.push(GAMES[i] || {id:i,name:'Mäng #'+(i+1),mins:0});
+  }
+  return out;
+}
+const checkedCount = s => TOTAL - s.off.size;
+const isOn = (s,g) => !s.off.has(g.id);
+function toggle(s,g){ s.off.has(g.id) ? s.off.delete(g.id) : s.off.add(g.id); }
+
+/* ---- shared bits --------------------------------------------------------- */
+function header(s){
+  return '<b>'+num(checkedCount(s))+'</b> / <b>'+num(TOTAL)+'</b> valitud · näitan '+
+         num(s.page*s.size+1)+'–'+num(Math.min(TOTAL,(s.page+1)*s.size));
+}
+function lineList(s){
+  return pageRows(s).map((g,i)=>{
+    const on=isOn(s,g), rk=String(s.page*s.size+i+1).padStart(2,' ');
+    return '<div class="cline'+(on?' on':'')+'">'+
+      '<span class="bx">'+(on?'☑':'☐')+'</span> '+
+      '<span class="rk">'+rk.replace(/ /g,'&nbsp;')+'.</span> '+
+      '<span class="nm">'+esc(g.name)+'</span>'+
+      (noteOf(g)?' <span class="note">· '+noteOf(g)+'</span>':'')+
+    '</div>';
+  }).join('');
+}
+function meter(html,cls){ return '<div class="meter">'+html+'</div>'; }
+function trips(s,label){
+  return '<div class="row2">Round trips this session: <b>'+s.trips+'</b>'+
+         (label?' · '+label:'')+'</div>';
+}
+
+/* ---- A: select menu (what ships today) ----------------------------------- */
+function renderA(){
+  const s=S.A, rows=pageRows(s), pages=pagesOf(s);
+  if(s.draft===null) s.draft=new Set(rows.filter(g=>isOn(s,g)).map(g=>g.id));
+  let h='<div class="embed">'+
+    '<div class="embed-title">'+TITLE+'</div>'+
+    '<div class="embed-desc"><div class="intro">'+INTRO+'</div>'+
+    '<div class="count">'+header(s)+'</div>'+
+    '<div class="clines">'+lineList(s)+'</div></div>'+
+    '<div class="embed-footer">Lk '+(s.page+1)+'/'+pages+' · '+FOOT+'</div></div>';
+
+  h+='<div class="sel" onclick="ddToggle()">Märgi, mida soovid — lk '+(s.page+1)+'/'+pages+
+     '<span class="chev">▾</span></div>';
+  h+='<div class="dropdown'+(s.open?'':' hidden')+'">'+
+      rows.map(g=>'<div class="opt'+(s.draft.has(g.id)?' on':'')+'" onclick="ddPick('+g.id+')">'+
+        '<div class="ck">'+(s.draft.has(g.id)?'✓':'')+'</div>'+
+        '<div class="ol">'+esc(g.name)+'<div class="od">'+(noteOf(g)||'&nbsp;')+'</div></div>'+
+      '</div>').join('')+
+      '<div class="dd-foot"><button class="btn primary" onclick="ddSubmit()">Kinnita valik</button></div>'+
+     '</div>';
+
+  h+='<div class="rowbtns">'+
+      btn('◀','navA(-1)',s.page===0)+
+      btn((s.page+1)+' / '+pages,'',true)+
+      btn('▶','navA(1)',s.page>=pages-1)+
+     '</div>';
+  h+='<div class="rowbtns">'+
+      btn('Märgi kõik','allA(true)')+btn('Eemalda kõik','allA(false)')+
+      btn('Impordi valitud','',false,'success')+btn('Katkesta','',false,'danger')+
+     '</div>';
+
+  h+=meter('<b>Components:</b> 3 rows of 5 · 1 select + 3 nav + 4 action buttons = '+
+    '<span class="ok">11 of 25 buttons, 3 of 5 rows</span>. Plenty of headroom.'+
+    trips(s,'ticking eight games on one page costs <b>1</b>'));
+  document.getElementById('A').innerHTML=h;
+}
+function ddToggle(){ S.A.open=!S.A.open; renderA(); }
+function ddPick(id){ const d=S.A.draft; d.has(id)?d.delete(id):d.add(id); renderA(); }
+function ddSubmit(){
+  const s=S.A;
+  // A page submit replaces exactly that page's slice — an empty selection means
+  // "nothing on this page", never "no change". Same rule as the real collector.
+  pageRows(s).forEach(g=> s.draft.has(g.id) ? s.off.delete(g.id) : s.off.add(g.id));
+  s.open=false; s.trips++; renderA();
+}
+function navA(d){ const s=S.A; s.page+=d; s.draft=null; s.open=false; s.trips++; renderA(); }
+function allA(on){ const s=S.A;
+  if(on) s.off.clear(); else for(let i=0;i<TOTAL;i++) s.off.add(i);
+  s.draft=null; s.trips++; renderA(); }
+
+/* ---- B: button grid ------------------------------------------------------ */
+function renderB(){
+  const s=S.B, rows=pageRows(s), pages=pagesOf(s);
+  let h='<div class="embed">'+
+    '<div class="embed-title">'+TITLE+'</div>'+
+    '<div class="embed-desc"><div class="intro">'+INTRO+'</div>'+
+    '<div class="count">'+header(s)+'</div>'+
+    '<div class="clines">'+lineList(s)+'</div></div>'+
+    '<div class="embed-footer">Lk '+(s.page+1)+'/'+pages+' · '+FOOT+
+    ' · <b>numbrinupp lülitab rea sisse-välja</b></div></div>';
+
+  for(let r=0;r<4;r++){
+    h+='<div class="rowbtns">';
+    for(let c=0;c<5;c++){
+      const i=r*5+c, g=rows[i];
+      if(!g){ h+='<span style="flex:1"></span>'; continue; }
+      const n=s.page*s.size+i+1, on=isOn(s,g);
+      h+='<button class="btn grid'+(on?' on':'')+'" title="'+esc(g.name)+'" '+
+         'onclick="tog(\'B\','+g.id+')">'+(on?'☑':'☐')+' '+n+'</button>';
+    }
+    h+='</div>';
+  }
+  h+='<div class="rowbtns">'+
+      btn('◀','navB(-1)',s.page===0)+btn('▶','navB(1)',s.page>=pages-1)+
+      btn('Märgi kõik','allB(true)')+
+      btn('Impordi','',false,'success')+btn('Katkesta','',false,'danger')+
+     '</div>';
+  h+=meter('<b>Components:</b> 20 game buttons + 5 nav = '+
+    '<span class="warn">25 of 25 buttons, 5 of 5 rows — the message is completely full.</span> '+
+    'No page counter fits (it moves to the footer), and “Eemalda kõik” has to be dropped or merged.'+
+    trips(s,'ticking eight games costs <b>8</b>'));
+  document.getElementById('B').innerHTML=h;
+}
+function navB(d){ S.B.page+=d; S.B.trips++; renderB(); }
+function allB(on){ const s=S.B; if(on) s.off.clear(); else for(let i=0;i<TOTAL;i++) s.off.add(i);
+  s.trips++; renderB(); }
+
+/* ---- C: Components V2 ---------------------------------------------------- */
+function renderC(){
+  const s=S.C, rows=pageRows(s), pages=pagesOf(s);
+  let h='<div class="cv2">';
+  h+='<div class="td"><b>'+TITLE+'</b> — lk '+(s.page+1)+'/'+pages+'<br>'+INTRO+
+     '<br><br>'+header(s)+'</div>';
+  h+='<div class="container">';
+  rows.forEach((g,i)=>{
+    const on=isOn(s,g), n=s.page*s.size+i+1;
+    h+='<div class="section">'+
+        '<div class="txt">'+(on?'<b>'+esc(g.name)+'</b>':esc(g.name))+
+          (noteOf(g)?' <span class="note">· '+noteOf(g)+'</span>':'')+'</div>'+
+        '<button class="btn acc'+(on?' on':'')+'" onclick="tog(\'C\','+g.id+')">'+
+          (on?'☑':'☐')+'</button>'+
+       '</div>';
+  });
+  h+='</div>';
+  h+='<div class="rowbtns">'+
+      btn('◀','navC(-1)',s.page===0)+btn((s.page+1)+' / '+pages,'',true)+
+      btn('▶','navC(1)',s.page>=pages-1)+
+      btn('Impordi','',false,'success')+btn('Katkesta','',false,'danger')+
+     '</div>';
+  h+=meter('<b>Components:</b> 1 header text + 1 container + 10 sections × (1 section + 1 text + 1 button) '+
+    '+ 1 action row + 5 buttons = <span class="warn">37 of 40</span>. '+
+    'A Container holds at most 10 children, which is what caps the page at 10 games. '+
+    'No embed on this message — Components V2 forbids one.'+
+    trips(s,'ticking eight games costs <b>8</b>'));
+  h+='</div>';
+  document.getElementById('C').innerHTML=h;
+}
+function navC(d){ S.C.page+=d; S.C.trips++; renderC(); }
+
+/* ---- shared ------------------------------------------------------------- */
+function tog(k,id){ const s=S[k]; toggle(s,GAMES[id]||{id:id}); s.trips++; render(k); }
+function btn(label,fn,disabled,cls){
+  return '<button class="btn'+(cls?' '+cls:'')+'"'+(disabled?' disabled':'')+
+         (fn?' onclick="'+fn+'"':'')+'>'+label+'</button>';
+}
+function render(k){ ({A:renderA,B:renderB,C:renderC})[k](); }
+renderA(); renderB(); renderC();
+</script>
+</body>
+</html>

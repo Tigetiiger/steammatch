@@ -1,3 +1,8 @@
 node_modules/
 data/
 .env
+
+# Every local env file, including timestamped backups. .env.example is the
+# only one that may ever be committed.
+.env*
+!.env.example

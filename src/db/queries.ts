@@ -508,6 +508,14 @@ const SQL_DELETE_STEAM_BY_USER = `DELETE FROM steam_accounts WHERE user_id = ?`;
 const SQL_GET_STEAM_OWNER = `SELECT user_id FROM steam_accounts WHERE steam_id64 = ?`;
 const SQL_DELETE_STEAM_BY_ID = `DELETE FROM steam_accounts WHERE steam_id64 = ?`;
 const SQL_DELETE_USER_GAMES = `DELETE FROM user_games WHERE user_id = ?`;
+// Steam-derived rows ONLY. Hand-added games (playtime_tracked = 0) never came
+// from a Steam account, so unlinking or relinking one must not take them: they
+// are the whole point of the "add another game" panel and a person can own them
+// without ever having linked Steam at all. Full erasure (/privacy -> forget me)
+// is the one place that still deletes everything.
+const SQL_DELETE_STEAM_USER_GAMES = `
+  DELETE FROM user_games WHERE user_id = ? AND playtime_tracked = 1
+`;
 const SQL_INSERT_STEAM = `INSERT INTO steam_accounts (steam_id64, user_id, added_by) VALUES (?, ?, ?)`;
 
 /**
@@ -557,8 +565,10 @@ export function linkSteam(
 
     if (current !== undefined) {
       prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
-      // The library belonged to the OLD steam account. It must not survive.
-      prep(db, SQL_DELETE_USER_GAMES).run(userId);
+      // The library belonged to the OLD steam account. It must not survive --
+      // but only the Steam half of it: manually added games are not the old
+      // account's and switching Steam accounts is not a reason to lose them.
+      prep(db, SQL_DELETE_STEAM_USER_GAMES).run(userId);
       // Neither must its exclusions: appids are per-account, so keeping them
       // would silently suppress unrelated games in the NEW account's library.
       prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
@@ -568,11 +578,15 @@ export function linkSteam(
   });
 }
 
-/** Drop the Steam link and everything derived from it, keeping the user's settings. */
+/**
+ * Drop the Steam link and everything derived from it, keeping the user's
+ * settings -- and keeping their manually added games, which are not derived
+ * from it. Unlinking Steam is not a request to forget that they play Minecraft.
+ */
 export function unlink(db: Database, userId: string): void {
   inTransaction(db, () => {
     prep(db, SQL_DELETE_STEAM_BY_USER).run(userId);
-    prep(db, SQL_DELETE_USER_GAMES).run(userId);
+    prep(db, SQL_DELETE_STEAM_USER_GAMES).run(userId);
     // The import checklist's answers were about this account's library.
     prep(db, SQL_DELETE_EXCLUDED_GAMES).run(userId);
   });

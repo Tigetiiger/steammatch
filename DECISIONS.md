@@ -115,20 +115,46 @@ that makes users guess.
 
 ---
 
-## 6. The checklist is a select menu **plus** a rendered list
+## 6. The checklist puts a toggle button on every game's own line
 
-**Decision.** Both, on one message.
+**Was.** A select menu plus a rendered `☑`/`☐` list, 25 per page. The menu was
+the input device and the list was the display, because a select shows its
+selection only while the dropdown is open. It worked, but the checkmark you
+clicked and the checkmark you read were two different things in two places.
 
-**Why.** A select menu is the only component that toggles 25 things in one
-interaction — buttons cap out at 25 total across 5 rows and would leave no room
-for navigation. But a select menu shows its selection only while the dropdown is
-open, and only for the current page, so on its own the user cannot see what they
-have chosen. The embed re-renders `☑`/`☐` as text; the menu is just the input
-device. Drop either half and the screen is unusable.
+**Decision.** Components V2: one `Section` per game, its text on the left and a
+`Button` accessory on the right. You click the mark that is on the row.
 
-**Consequence.** A page submit replaces exactly that page's slice of state. An
-empty `values` array means "nothing on this page", never "no change" — get that
-wrong and unticking a whole page does nothing.
+**What it cost: 25 per page became 10.** A V2 message allows 40 components
+counting nested ones, and an inline row costs three — Section, TextDisplay,
+Button:
+
+```
+1 header + 1 container + (10 × 3) + 1 action row + 5 buttons = 38 of 40
+```
+
+Eleven is the arithmetic ceiling (40 exactly, no Container and so no accent
+bar). Twenty is not reachable in this shape at all: 20 × 3 = 60. A 412-game
+import is now 42 pages instead of 17. `countComponents()` and a test in
+`curation.test.ts` hold the budget; raising `CHECKLIST_PAGE` fails them.
+
+**Also lost.** The select menu could toggle a whole page in one interaction;
+buttons are one round trip each. `Märgi kõik` / `Eemalda kõik` survive as a
+single button whose meaning flips, because five is the row's cap and the page
+counter had to move into the header text to free a slot.
+
+**Considered and rejected:** 20 per page with five names in a TextDisplay and a
+row of five numbered buttons beneath them (35 components, 5 rows). It keeps the
+page size, but the mark is under the name rather than on it, which is the thing
+this change was for.
+
+**Consequence: the list is a follow-up message, not the deferred reply.**
+`IS_COMPONENTS_V2` must be set when a message is *created* — it cannot be added
+by an edit, and cannot be removed once set. The callers must defer before
+talking to Steam, and that reply has to stay a normal message: it carries the
+private-profile embeds and the final import summary. So the instructions stay on
+the parent reply and the interactive list arrives beside it as its own ephemeral
+follow-up.
 
 ---
 
@@ -277,6 +303,50 @@ rather than the leaky one.
 
 **Falls out for free.** `minOwners = 2` means a game only appears once two
 eligible members have it, so a person's solo games never surface on their board.
+
+---
+
+## 14. `/steam unlink` keeps hand-added games; `/privacy → forget me` does not
+
+**Context.** `unlink()` ran `DELETE FROM user_games WHERE user_id = ?`, which took
+manual rows with it. Those never came from Steam, and a person can own them
+without ever having linked a Steam account at all — so unlinking Steam was
+deleting data Steam had nothing to do with. The same `DELETE` also ran on a
+relink, so switching Steam accounts silently cost you your Minecraft.
+
+**Decision.** Both paths now delete `WHERE user_id = ? AND playtime_tracked = 1`.
+`forget()` keeps the unscoped delete: an erasure request means everything.
+
+**The follow-on.** `unlinkSub` also called `setOptedIn(false)` unconditionally.
+With manual rows now surviving, that leaves them stored and hidden from
+everyone — the same disappearance, one layer down. It is now conditional on
+nothing being left.
+
+**Consequence.** "Unlink deletes everything" is no longer true, so the command
+description and the README say what it actually removes.
+
+---
+
+## 15. The `/games list` threshold filter exists twice, and only one copy had the rule
+
+**Context.** `/games list` pulls the library once and re-filters it in memory
+when a threshold button is pressed. The SQL said
+`(playtime_tracked = 0 OR playtime_forever > @min)`; the in-memory twin said
+`g.playtime > m`. So hand-added games survived the query and were dropped by the
+default 30-minute filter before anything rendered — the games were in the
+database, and the one screen meant to show them never did.
+
+**Also.** `listSub` checked `getLinkInfo() === null` *before* checking whether
+there were any rows, so somebody who had only ever used the panel's "add another
+game" button was told they had no library at all. Games are checked first now.
+
+**Decision.** The predicate is `passesPlaytimeFilter()` in `commands/games.ts`,
+exported so a test can hold it to the SQL's rule.
+
+**Why not one copy.** Re-querying on every button press is the alternative, and
+the whole reason the list is pulled unfiltered is that a filter click must not
+touch the database. Two copies is the cost; a named, tested function is the
+guard rail.
 
 ---
 

@@ -36,7 +36,13 @@ import {
   upsertManualGame,
   whoOwns,
 } from '../src/db/queries.js';
-import { LIMITS, checklistEmbed, type ChecklistView } from '../src/ui/embeds.js';
+import { LIMITS, checklistHeaderText, checklistRowText, type ChecklistView } from '../src/ui/embeds.js';
+import {
+  CHECKLIST_PAGE,
+  checklistComponents,
+  countComponents,
+  type ChecklistItem,
+} from '../src/ui/checklist.js';
 import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
 import type { LibraryResult, OwnedGame, ProfileState } from '../src/types.js';
 
@@ -303,59 +309,128 @@ describe('migration onto a database created before curation existed', () => {
  * The checklist screen itself
  * ------------------------------------------------------------------ */
 
-describe('the checklist embed', () => {
+describe('the checklist screen', () => {
   const row = (label: string, checked: boolean, note?: string) => ({
     label,
     checked,
     ...(note === undefined ? {} : { note }),
   });
 
-  const view = (pageRows: ReturnType<typeof row>[], over: Partial<ChecklistView> = {}) =>
-    checklistEmbed({
+  const header = (over: Partial<ChecklistView> = {}) =>
+    checklistHeaderText({
       title: 'Choose what to import',
       intro: 'Untick anything you would rather I did not store.',
-      pageRows,
+      pageRows: [],
       offset: 0,
       page: 0,
       pages: 1,
-      checked: pageRows.filter((r) => r.checked).length,
-      total: pageRows.length,
+      checked: 1,
+      total: 2,
       checkedMeans: 'imported',
       uncheckedMeans: 'not stored',
       ...over,
-    }).toJSON();
+    });
 
-  it('renders a box per row so state is visible off the open dropdown', () => {
-    const d = view([row('Factorio', true, '83 h played'), row('Secret Game', false)])
-      .description!;
-    expect(d).toContain('☑');
-    expect(d).toContain('☐');
-    expect(d).toMatch(/☐.*Secret Game/);
-    expect(d).toMatch(/☑.*Factorio/);
+  it('renders a box per row, so state is readable without tracing to the button', () => {
+    expect(checklistRowText(row('Factorio', true, '83 h played'), 1)).toContain('☑');
+    expect(checklistRowText(row('Secret Game', false), 2)).toContain('☐');
+    expect(checklistRowText(row('Factorio', true, '83 h played'), 1)).toContain('83 h played');
   });
 
   it('escapes game names, so a title cannot restyle the rest of the list', () => {
-    const d = view([row('*Hell*_divers_', true)]).description!;
-    expect(d).toContain('\\*Hell\\*\\_divers\\_');
-  });
-
-  it('stays inside every Discord limit with 25 pathological names', () => {
-    const evil = '*'.repeat(300) + '_Game_';
-    const e = view(
-      Array.from({ length: 25 }, () => row(evil, true, '999 h played')),
-      { pages: 40, page: 12, offset: 300, total: 1000, checked: 998 },
-    );
-    expect((e.description ?? '').length).toBeLessThanOrEqual(LIMITS.description);
-    expect((e.title ?? '').length).toBeLessThanOrEqual(LIMITS.title);
-    expect((e.footer?.text ?? '').length).toBeLessThanOrEqual(LIMITS.footer);
+    expect(checklistRowText(row('*Hell*_divers_', true), 1)).toContain('\\*Hell\\*\\_divers\\_');
   });
 
   it('spells out what each state means, since the words differ per screen', () => {
-    const e = view([row('Factorio', true)], {
-      checkedMeans: 'teised näevad',
-      uncheckedMeans: 'ainult sinule',
-    });
-    expect(e.footer?.text).toContain('linnuke = teised näevad');
-    expect(e.footer?.text).toContain('ilma = ainult sinule');
+    const h = header({ checkedMeans: 'teised näevad', uncheckedMeans: 'ainult sinule' });
+    expect(h).toContain('linnuke = teised näevad');
+    expect(h).toContain('ilma = ainult sinule');
+  });
+
+  it('names the page in the header, because no button is left to hold it', () => {
+    expect(header({ pages: 42, page: 11 })).toContain('lk 12/42');
+    // A single page says nothing -- "lk 1/1" is noise.
+    expect(header({ pages: 1 })).not.toContain('lk');
+  });
+
+  /* ---------------------------------------------------------------- *
+   * The budget. This is the constraint that set the page size, and it
+   * is invisible in the code that draws a row -- so it gets a test.
+   * ---------------------------------------------------------------- */
+
+  const items = (n: number): ChecklistItem[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: String(-(i + 1)),
+      label: '*'.repeat(300) + '_Game_',
+      note: 'mängitud 999 h',
+    }));
+
+  const state = (n: number, page = 0) => ({
+    sid: 'abc123',
+    items: items(n),
+    checked: new Set(items(n).map((i) => i.id)),
+    page,
+    title: 'Vali, mida importida',
+    checkedMeans: 'salvestatakse',
+    uncheckedMeans: 'ei salvestata',
+    saveLabel: 'Impordi valitud',
+  });
+
+  it('fits Discord\'s 40-component budget on a full page', () => {
+    const n = countComponents(checklistComponents(state(1000)));
+    // 1 header + 1 container + 10 x (section + text + button) + row + 5 buttons
+    expect(n).toBe(38);
+    expect(n).toBeLessThanOrEqual(LIMITS.componentsV2);
+  });
+
+  it('keeps the container within its 10-child cap', () => {
+    const tree = checklistComponents(state(1000)) as { toJSON(): unknown }[];
+    const container = tree[1]!.toJSON() as { components: unknown[] };
+    expect(container.components).toHaveLength(CHECKLIST_PAGE);
+    expect(container.components.length).toBeLessThanOrEqual(LIMITS.containerChildren);
+  });
+
+  it('would blow the budget at the old page size, which is why it moved to 10', () => {
+    // Not a hypothetical: 25 rows is what the select-menu version showed.
+    const perRow = 3;
+    expect(1 + 1 + 25 * perRow + 1 + 5).toBeGreaterThan(LIMITS.componentsV2);
+  });
+
+  it('spends exactly five buttons on navigation, the row cap', () => {
+    const tree = checklistComponents(state(1000)) as { toJSON(): unknown }[];
+    const nav = tree[2]!.toJSON() as { components: unknown[] };
+    expect(nav.components).toHaveLength(5);
+  });
+
+  it('flips the mark-all button to clear-all once everything is ticked', () => {
+    const all = checklistComponents(state(30)) as { toJSON(): unknown }[];
+    const navAll = JSON.stringify(all[2]!.toJSON());
+    expect(navAll).toContain('Eemalda kõik');
+
+    const some = { ...state(30), checked: new Set(['-1']) };
+    const navSome = JSON.stringify((checklistComponents(some) as { toJSON(): unknown }[])[2]!.toJSON());
+    expect(navSome).toContain('Märgi kõik');
+  });
+
+  it('keeps a negative appid intact in the toggle id, sign and all', () => {
+    const tree = checklistComponents(state(30)) as { toJSON(): unknown }[];
+    const container = JSON.stringify(tree[1]!.toJSON());
+    expect(container).toContain('cl:abc123:t:-1');
+    // The handler splits on ':' and rejoins from index 3, so the sign survives.
+    expect('cl:abc123:t:-1'.split(':').slice(3).join(':')).toBe('-1');
+  });
+
+  it('disables prev on the first page and next on the last', () => {
+    const navOf = (page: number) =>
+      ((checklistComponents(state(30, page)) as { toJSON(): unknown }[])[2]!.toJSON() as {
+        components: { custom_id: string; disabled?: boolean }[];
+      }).components;
+    const first = navOf(0);
+    expect(first.find((c) => c.custom_id.endsWith(':prev'))?.disabled).toBe(true);
+    expect(first.find((c) => c.custom_id.endsWith(':next'))?.disabled).toBe(false);
+    const last = checklistComponents(state(30, 2)) as { toJSON(): unknown }[];
+    const nav = last[2]!.toJSON() as { components: { custom_id: string; disabled?: boolean }[] };
+    expect(nav.components.find((c) => c.custom_id.endsWith(':next'))?.disabled).toBe(true);
+    expect(nav.components.find((c) => c.custom_id.endsWith(':prev'))?.disabled).toBe(false);
   });
 });
