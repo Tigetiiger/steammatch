@@ -3,8 +3,6 @@
  */
 
 import {
-  ButtonBuilder,
-  ButtonStyle,
   ComponentType,
   MessageFlags,
   PermissionFlagsBits,
@@ -31,7 +29,6 @@ import {
   libraryEmbed,
   noticeEmbed,
   notLinkedEmbed,
-  safeName,
   profileStateEmbed,
   retryRow,
   sharedEmbed,
@@ -381,30 +378,6 @@ async function sharedSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<vo
         theirLibrarySize: theirCount,
         filter: v.filter,
       }),
-    extra: {
-      buttons: (v) => [
-        new ButtonBuilder()
-          .setCustomId(`px:${v.id}:random`)
-          .setStyle(ButtonStyle.Primary)
-          .setLabel('Vali juhuslik'),
-      ],
-      handle: async (i, v, key) => {
-        if (key !== 'random') return 'rerender';
-        const pick = v.rows[Math.floor(Math.random() * v.rows.length)];
-        if (!pick) {
-          await i.reply({
-            content: 'Pole millestki valida.',
-            flags: MessageFlags.Ephemeral,
-          });
-          return 'handled';
-        }
-        await i.reply({
-          content: `Täna: **${gameName(pick.name)}** — ${safeName(meName)} ja ${safeName(themName)} mõlemad mängivad seda.`,
-          allowedMentions: { parse: [] },
-        });
-        return 'handled';
-      },
-    },
   });
 }
 
