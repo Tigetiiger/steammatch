@@ -60,11 +60,13 @@ const SHARED_PAGE = 8;
 // mutually imported, so at THIS module's evaluation time index.ts's consts are
 // still in their temporal dead zone. ROW_LIMITS is only safe inside functions.
 const WHO_MAX_OWNERS = 25;
+/** How long the ping button stays armed without the command's owner touching it. */
+const WHO_IDLE_MS = 120_000;
 
 export function minPlaytimeOption(o: SlashCommandIntegerOption): SlashCommandIntegerOption {
   return o
     .setName('min_playtime')
-    .setDescription('Vähim mänguaeg minutites. Vaikimisi 30.')
+    .setDescription('Vähim mänguaeg minutites. Vaikimisi 30. 0 = kõik mängud.')
     .setRequired(false)
     .setMinValue(0)
     .setMaxValue(100_000);
@@ -488,9 +490,17 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
 
   const collector = message.createMessageComponentCollector({
     componentType: ComponentType.Button,
-    idle: 120_000,
+    idle: WHO_IDLE_MS,
     time: 14 * 60_000,
   });
+
+  // The collector's own `idle` is reset by EVERY click it collects, including a
+  // stranger's copy. Since copy is deliberately open to anyone, that let a
+  // passer-by hold the ping button armed far past the two minutes it was meant
+  // to survive. So the ping button carries its own idle clock, advanced only by
+  // the person who ran the command.
+  let ownerActiveAt = Date.now();
+
   collector.on('collect', (i) => {
     void (async () => {
       // Copy is open to anyone who can see the message: it hands back exactly
@@ -519,8 +529,22 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
           .catch(() => {});
         return;
       }
+      // Read the clock BEFORE advancing it, or the check can never fail.
+      const idleFor = Date.now() - ownerActiveAt;
+      ownerActiveAt = Date.now();
+
       if (!i.customId.endsWith(':ping')) {
         await i.deferUpdate().catch(() => {});
+        return;
+      }
+      if (idleFor > WHO_IDLE_MS) {
+        await i
+          .reply({
+            content: 'See sõnum on liiga vana. Käivita käsk uuesti.',
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
+        collector.stop('idle');
         return;
       }
       const ids = owners.map((o) => o.userId);

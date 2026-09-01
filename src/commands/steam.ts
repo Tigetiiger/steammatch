@@ -602,8 +602,13 @@ async function changeSub(
     // it and reads as the opposite on every screen.
     initial: all.filter((g) => !g.hidden).map((g) => String(g.appid)),
     title: 'Kes mida näeb',
+    // NOT scoped to a guild, and the wording must not imply otherwise.
+    // setHiddenGames writes user_games.hidden, which has no guild column, so a
+    // game hidden here is hidden in every server the bot is in. /privacy's
+    // "visible here" toggle IS per-guild -- these two controls read alike and
+    // are not, so say plainly which one this is.
     intro:
-      'Märgitud mänge näevad teised selles serveris. Märkimata mängud jäävad **sinu** /games list nimekirja, aga ei ilmu mujal.',
+      'Märgitud mänge näevad teised. Märkimata mängud jäävad **sinu** /games list nimekirja, aga ei ilmu kuskil mujal.',
     checkedMeans: 'teised näevad',
     uncheckedMeans: 'ainult sinule',
     saveLabel: 'Salvesta',
@@ -632,7 +637,7 @@ async function changeSub(
       noticeEmbed(
         'Nähtavus salvestatud',
         hidden.length === 0
-          ? `Kõik **${visible}** su mängu on selles serveris nähtavad.`
+          ? `Kõik **${visible}** su mängu on teistele nähtavad.`
           : `**${visible}** nähtav · **${hidden.length}** peidetud.\n\nPeidetud mängud on endiselt sinu **/games list** nimekirjas, tähisega 🔒.`,
         COLORS.ok,
       ),

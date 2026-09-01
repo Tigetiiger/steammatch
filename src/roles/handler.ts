@@ -18,7 +18,8 @@ import { PermissionFlagsBits } from 'discord.js';
 import type { GuildMember, MessageReaction, PartialMessageReaction, PartialUser, User } from 'discord.js';
 import type { Database } from 'better-sqlite3';
 import { emojiKey } from './emoji.js';
-import { findBinding, siblingRoleIds } from './store.js';
+import { privilegedPermissionNames } from './guard.js';
+import { findBinding, removeBindingByRole, siblingRoleIds } from './store.js';
 
 export type ReactionAction = 'add' | 'remove';
 
@@ -136,6 +137,37 @@ export async function applyReaction(
       `Ma ei saa rolli **${role.name}** anda, sest see asub serveri sätetes minu enda rollist kõrgemal. Palun anna sellest administraatorile teada.`,
     );
     return null;
+  }
+
+  // The same re-check, for the same reason, applied to PERMISSIONS. canOfferRole
+  // refuses a moderator role at bind time, but a role's permissions are edited
+  // in the server settings long after the panel is built: tick Manage Messages
+  // onto a colour role bound months ago and, without this, every member in the
+  // guild can hand themselves that permission by clicking a reaction. The
+  // position check does not catch it -- a colour role sits below the bot.
+  //
+  // ONLY on grant. A removal is always safe, and refusing one would strand the
+  // role on everyone who already holds it.
+  if (plan.action === 'add') {
+    const privileged = privilegedPermissionNames(role);
+    if (privileged.length > 0) {
+      console.warn(
+        `[roles] ${role.id} has gained ${privileged.join(', ')} since it was bound in ${guild.id}; refusing and dropping the binding`,
+      );
+      // Drop the binding too. Leaving it means the panel keeps advertising a
+      // button that silently does nothing, and the next permission audit has
+      // nothing to find.
+      try {
+        removeBindingByRole(deps.db, full.message.id, plan.roleId);
+      } catch (err) {
+        console.error('[roles] could not drop the unsafe binding', err);
+      }
+      await deps.notify?.(
+        member,
+        `Rolli **${role.name}** ma enam jagada ei saa: sellele on lisatud moderaatori õigused (${privileged.join(', ')}), mida ei tohi endale ise võtta. Eemaldasin selle paneelilt — anna administraatorile teada.`,
+      );
+      return null;
+    }
   }
 
   try {

@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { applySchema } from '../src/db/index.js';
 import { emojiKey, normalizeUnicode, parseEmojiInput } from '../src/roles/emoji.js';
 import { canOfferRole } from '../src/roles/guard.js';
-import { planReaction } from '../src/roles/handler.js';
+import { applyReaction, planReaction } from '../src/roles/handler.js';
 import {
   MAX_BINDINGS,
   addBinding,
@@ -361,5 +361,157 @@ describe('canOfferRole', () => {
       permissions: PermissionFlagsBits.SendMessages | PermissionFlagsBits.Connect,
     });
     expect(canOfferRole(role, bot, actor)).toEqual({ ok: true });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Grant-time re-validation
+ *
+ * canOfferRole runs when a moderator BINDS a role. Permissions are edited in
+ * the server settings long afterwards, so the checks that matter are the ones
+ * applyReaction repeats at grant time.
+ * ------------------------------------------------------------------ */
+
+function fakeReactor(id: string, held: string[] = []) {
+  const cache = new Map(held.map((r) => [r, { id: r }]));
+  return {
+    id,
+    roles: {
+      cache,
+      added: [] as string[],
+      removed: [] as string[],
+      replaced: [] as string[][],
+      has: (r: string) => cache.has(r),
+      async add(r: string) {
+        this.added.push(r);
+      },
+      async remove(r: string) {
+        this.removed.push(r);
+      },
+      async set(next: string[]) {
+        this.replaced.push(next);
+      },
+    },
+  };
+}
+
+function fakeGuild(role: unknown, member: unknown, botHighest = 50) {
+  const bot = {
+    permissions: new PermissionsBitField(PermissionFlagsBits.ManageRoles),
+    roles: { highest: { position: botHighest } },
+  };
+  return {
+    id: G,
+    members: { me: bot, fetch: async () => member },
+    roles: {
+      cache: { get: (id: string) => ((role as { id: string }).id === id ? role : undefined) },
+      fetch: async () => role,
+    },
+  };
+}
+
+function fakeReaction(guild: unknown, emoji: { id?: string | null; name?: string | null }) {
+  return {
+    partial: false,
+    emoji,
+    message: { id: MSG, guild },
+  } as unknown as import('discord.js').MessageReaction;
+}
+
+describe('applyReaction re-checks permissions at grant time', () => {
+  const REACTOR = 'U_member';
+
+  function bind(role: { id: string }, emojiRaw = '⛏️') {
+    panel();
+    const parsed = parseEmojiInput(emojiRaw)!;
+    addBinding(db, MSG, { emojiKey: parsed.key, emojiRaw: parsed.raw, roleId: role.id });
+  }
+
+  it('grants an ordinary cosmetic role', async () => {
+    const role = fakeRole({ id: 'R_colour', position: 10 });
+    bind(role);
+    const member = fakeReactor(REACTOR);
+    const plan = await applyReaction(
+      { db },
+      fakeReaction(fakeGuild(role, member), { id: null, name: '⛏️' }),
+      { id: REACTOR, bot: false } as unknown as import('discord.js').User,
+      'add',
+    );
+    expect(plan).toMatchObject({ action: 'add', roleId: 'R_colour' });
+    expect(member.roles.added).toEqual(['R_colour']);
+  });
+
+  it('refuses a role that gained a moderator permission AFTER it was bound', async () => {
+    // Bound while harmless -- canOfferRole would have accepted this exact role.
+    const harmless = fakeRole({ id: 'R_colour', position: 10 });
+    bind(harmless);
+    expect(canOfferRole(harmless, fakeMember('U_bot', 50), fakeMember(MOD, 40))).toEqual({
+      ok: true,
+    });
+
+    // An admin later ticks Manage Messages onto it. Same id, same position:
+    // still below the bot, so the hierarchy check alone lets it through.
+    const nowPrivileged = fakeRole({
+      id: 'R_colour',
+      position: 10,
+      permissions: PermissionFlagsBits.ManageMessages,
+    });
+    const member = fakeReactor(REACTOR);
+    const told: string[] = [];
+
+    const plan = await applyReaction(
+      { db, notify: async (_m, text) => void told.push(text) },
+      fakeReaction(fakeGuild(nowPrivileged, member), { id: null, name: '⛏️' }),
+      { id: REACTOR, bot: false } as unknown as import('discord.js').User,
+      'add',
+    );
+
+    expect(plan).toBeNull();
+    expect(member.roles.added).toEqual([]);
+    expect(told.join(' ')).toContain('ManageMessages');
+    // And the binding is dropped, so the panel stops advertising a button that
+    // would hand out a moderator permission.
+    expect(findBinding(db, MSG, parseEmojiInput('⛏️')!.key)).toBeNull();
+  });
+
+  it('still REMOVES a privileged role, which is always safe', async () => {
+    const privileged = fakeRole({
+      id: 'R_mod',
+      position: 10,
+      permissions: PermissionFlagsBits.ManageMessages,
+    });
+    bind(privileged);
+    const member = fakeReactor(REACTOR, ['R_mod']);
+    const plan = await applyReaction(
+      { db },
+      fakeReaction(fakeGuild(privileged, member), { id: null, name: '⛏️' }),
+      { id: REACTOR, bot: false } as unknown as import('discord.js').User,
+      'remove',
+    );
+    expect(plan).toMatchObject({ action: 'remove', roleId: 'R_mod' });
+    expect(member.roles.removed).toEqual(['R_mod']);
+    // Refusing this would strand the role on everyone already holding it.
+    expect(findBinding(db, MSG, parseEmojiInput('⛏️')!.key)).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Reaction cleanup keys
+ * ------------------------------------------------------------------ */
+
+describe('the stored emoji key and a live reaction agree', () => {
+  it('a variation-selector emoji does not match its own cache key directly', () => {
+    const parsed = parseEmojiInput('⛏️')!;
+    // What we react WITH keeps the selector; what we STORE has it stripped.
+    // reactions.cache is keyed by the former, so /roles remove must not index
+    // the cache by the latter -- it has to normalise each key and compare.
+    expect(parsed.raw).not.toBe(parsed.key);
+    expect(emojiKey({ id: null, name: parsed.raw })).toBe(parsed.key);
+  });
+
+  it('a custom emoji keys on its id from both directions', () => {
+    const parsed = parseEmojiInput('<:pepe:123456789012345678>')!;
+    expect(parsed.key).toBe('123456789012345678');
+    expect(emojiKey({ id: '123456789012345678', name: 'pepe' })).toBe(parsed.key);
   });
 });

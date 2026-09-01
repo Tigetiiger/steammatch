@@ -19,7 +19,7 @@ import {
 import type { ChatInputCommandInteraction, GuildMember, Role, TextChannel } from 'discord.js';
 import { COLORS, gameName, noticeEmbed, rolePanelEmbed, safeName } from '../ui/embeds.js';
 import { canOfferRole, type GuardVerdict } from '../roles/guard.js';
-import { parseEmojiInput } from '../roles/emoji.js';
+import { emojiKey, parseEmojiInput } from '../roles/emoji.js';
 import {
   MAX_BINDINGS,
   addBinding,
@@ -392,7 +392,16 @@ async function removeSub(interaction: Inter, ctx: BotContext): Promise<void> {
   try {
     const channel = await interaction.client.channels.fetch(panel.channelId);
     const message = await (channel as TextChannel).messages.fetch(panel.messageId);
-    await message.reactions.cache.get(removed.emojiKey)?.remove();
+    // Matched on the NORMALISED key, not indexed by it. reactions.cache is
+    // keyed by `emoji.id ?? emoji.name`, and the name still carries the
+    // variation selector Discord's picker inserts -- so the cache key for the
+    // pickaxe is '\u26cf\ufe0f' while emoji_key stores the stripped '\u26cf'.
+    // A .get() therefore missed every VS16 emoji and left the dead reaction on
+    // the panel forever. Custom emoji were fine, since their key IS the id.
+    const stale = message.reactions.cache.find(
+      (r) => emojiKey({ id: r.emoji.id, name: r.emoji.name }) === removed.emojiKey,
+    );
+    await stale?.remove();
   } catch (err) {
     console.error('[roles] could not clear the reaction', err);
   }

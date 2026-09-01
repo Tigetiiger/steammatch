@@ -175,6 +175,24 @@ describe('removing manual games', () => {
     expect(removeUserGame(db, A, mc)).toBe(false);
     expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([10]);
   });
+
+  it('refuses to delete a Steam row, whatever appid it is handed', async () => {
+    linkSteam(db, A, '76561198000000001');
+    await syncLibrary(db, A, '76561198000000001', source([g(10, 'Factorio', 500)]));
+
+    // The panel offers manual games only, but the appid arrives in a select
+    // value: the predicate that makes the promise true belongs in the SQL.
+    expect(removeUserGame(db, A, 10)).toBe(false);
+    expect(listGames(db, A, -1, 50, 0).map((r) => r.appid)).toEqual([10]);
+  });
+
+  it('rejects a non-integer appid instead of handing it to the driver', () => {
+    const mc = upsertManualGame(db, 'Minecraft').appid;
+    expect(addUserGame(db, A, 1.5)).toBe(false);
+    expect(addUserGame(db, A, Number.NaN)).toBe(false);
+    expect(removeUserGame(db, A, 1.5)).toBe(false);
+    expect(addUserGame(db, A, mc)).toBe(true);
+  });
 });
 
 describe('the /games list threshold buttons', () => {

@@ -156,7 +156,7 @@ export async function openAddPanel(
 
     try {
       if (i.isStringSelectMenu() && action === 'pick') {
-        await handlePick(i, ctx, targetId, render);
+        await handlePick(i, ctx, guildId, targetId, render);
         return;
       }
       if (!i.isButton()) return;
@@ -185,12 +185,17 @@ export async function openAddPanel(
 async function handlePick(
   i: StringSelectMenuInteraction,
   ctx: Ctx,
+  guildId: string,
   targetId: string,
   render: () => { embeds: unknown[]; components: unknown[] },
 ): Promise<void> {
+  // Only what this panel actually offered. Discord validates select values
+  // against the options it sent, but the catalogue is re-read here anyway so
+  // the guarantee lives in our code rather than in an assumption about theirs.
+  const offered = new Set(guildCatalog(ctx.db, guildId, targetId, CATALOG_LIMIT).map((c) => c.appid));
   for (const value of i.values) {
     const appid = Number(value);
-    if (Number.isFinite(appid)) addUserGame(ctx.db, targetId, appid);
+    if (Number.isInteger(appid) && offered.has(appid)) addUserGame(ctx.db, targetId, appid);
   }
   await i.update(render() as never);
 }

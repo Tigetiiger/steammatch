@@ -49,6 +49,9 @@ import {
 } from '../src/ui/checklist.js';
 import { syncLibrary, type LibrarySource } from '../src/steam/sync.js';
 import type { LibraryResult, OwnedGame, ProfileState } from '../src/types.js';
+import { resolveMinPlaytime } from '../src/commands/index.js';
+import { NO_FILTER } from '../src/ui/paginate.js';
+import { DEFAULT_MIN_PLAYTIME } from '../src/types.js';
 
 const G = 'guild-1';
 const A = 'U_alice';
@@ -521,5 +524,50 @@ describe('the checklist screen', () => {
     const nav = last[2]!.toJSON() as { components: { custom_id: string; disabled?: boolean }[] };
     expect(nav.components.find((c) => c.custom_id.endsWith(':next'))?.disabled).toBe(true);
     expect(nav.components.find((c) => c.custom_id.endsWith(':prev'))?.disabled).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The playtime threshold
+ * ------------------------------------------------------------------ */
+
+describe('resolveMinPlaytime', () => {
+  let tdb: Database.Database;
+  beforeEach(() => {
+    tdb = new Database(':memory:');
+    applySchema(tdb);
+  });
+
+  it('passes an ordinary threshold through', () => {
+    expect(resolveMinPlaytime(tdb, null, 60)).toBe(60);
+    expect(resolveMinPlaytime(tdb, null, 30)).toBe(30);
+  });
+
+  it('turns 0 into NO_FILTER, because every query compares with a strict >', () => {
+    // A literal 0 would hide every tracked game with 0 minutes on it -- the
+    // exact opposite of what somebody typing 0 is asking for. -1 is the value
+    // the paginator's "Kõik" button already uses.
+    expect(resolveMinPlaytime(tdb, null, 0)).toBe(NO_FILTER);
+    expect(NO_FILTER).toBe(-1);
+  });
+
+  it('applies the same rule to a guild default of 0', () => {
+    tdb.prepare('INSERT INTO guild_settings (guild_id, default_min_playtime) VALUES (?, 0)').run(
+      'guild-zero',
+    );
+    expect(resolveMinPlaytime(tdb, 'guild-zero', null)).toBe(NO_FILTER);
+  });
+
+  it('falls back to the shared default with no option and no guild row', () => {
+    expect(resolveMinPlaytime(tdb, 'guild-unknown', null)).toBe(DEFAULT_MIN_PLAYTIME);
+    expect(resolveMinPlaytime(tdb, null, null)).toBe(DEFAULT_MIN_PLAYTIME);
+  });
+
+  it('prefers an explicit option over the guild default', () => {
+    tdb.prepare('INSERT INTO guild_settings (guild_id, default_min_playtime) VALUES (?, 600)').run(
+      'guild-strict',
+    );
+    expect(resolveMinPlaytime(tdb, 'guild-strict', null)).toBe(600);
+    expect(resolveMinPlaytime(tdb, 'guild-strict', 30)).toBe(30);
   });
 });

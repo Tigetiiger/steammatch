@@ -648,16 +648,14 @@ export function whoRow(
   storeUrl: string | null,
 ): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
+  // Both buttons exist for the same reason -- there is somebody to act on --
+  // so they share one condition.
   if (count > 0) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:ping`)
         .setStyle(ButtonStyle.Primary)
         .setLabel(truncate(count === 1 ? 'Pingi teda' : `Pingi neid ${count}`, LIMITS.buttonLabel)),
-    );
-  }
-  if (count > 0) {
-    row.addComponents(
       new ButtonBuilder()
         .setCustomId(`px:${sessionId}:copy`)
         .setStyle(ButtonStyle.Secondary)

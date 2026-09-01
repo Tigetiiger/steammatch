@@ -13,6 +13,7 @@ import type { SteamClient } from '../steam/client.js';
 import { DEFAULT_MIN_PLAYTIME, type Minutes } from '../types.js';
 import { getGuildMinPlaytime } from '../db/queries.js';
 import { looksLikeSteamToken, tokenRefusalEmbed, familySharingRow, noticeEmbed, COLORS } from '../ui/embeds.js';
+import { NO_FILTER } from '../ui/paginate.js';
 
 export type Db = Database;
 
@@ -70,17 +71,29 @@ export async function refuseIfSteamToken(
   return true;
 }
 
+/**
+ * Every threshold is applied with a strict `>`, so a literal 0 is not "no
+ * threshold" -- it hides every tracked game with 0 minutes on it, which is the
+ * opposite of what someone typing 0 is asking for. NO_FILTER (-1) is the value
+ * that means "all", and it is what the paginator's "Kõik" button already uses.
+ * Mapping it here keeps that one rule in one place instead of at each call site.
+ */
+function asThreshold(n: number): Minutes {
+  const floored = Math.floor(n);
+  return floored <= 0 ? NO_FILTER : floored;
+}
+
 /** The effective playtime threshold: explicit option, else the guild default. */
 export function resolveMinPlaytime(
   db: Db,
   guildId: string | null,
   option: number | null,
 ): Minutes {
-  if (option !== null && Number.isFinite(option) && option >= 0) return Math.floor(option);
+  if (option !== null && Number.isFinite(option) && option >= 0) return asThreshold(option);
   if (guildId) {
     try {
       const g = getGuildMinPlaytime(db, guildId);
-      if (typeof g === 'number' && Number.isFinite(g) && g >= 0) return g;
+      if (typeof g === 'number' && Number.isFinite(g) && g >= 0) return asThreshold(g);
     } catch {
       /* fall through to the shared default */
     }

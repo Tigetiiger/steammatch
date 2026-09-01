@@ -822,13 +822,25 @@ const SQL_ADD_USER_GAME = `
  * Steam sync, its real playtime must not be clobbered with an untracked 0.
  */
 export function addUserGame(db: Database, userId: string, appid: number): boolean {
+  // Integer, not merely finite: appid is a rowid-shaped key and the driver
+  // would otherwise be handed a float straight from a select-menu value.
+  if (!Number.isInteger(appid)) return false;
   ensureUser(db, userId);
   return prep(db, SQL_ADD_USER_GAME).run({ user: userId, appid }).changes > 0;
 }
 
-const SQL_REMOVE_USER_GAME = `DELETE FROM user_games WHERE user_id = ? AND appid = ?`;
+// playtime_tracked = 0 is not decoration. The only caller is the /games add
+// panel's "Eemalda" picker, which is documented as manual-games-only ("Steami
+// mängude jaoks kasuta /steam unlink") -- so the predicate that makes that true
+// belongs in the statement, not in the caller's choice of options. Without it a
+// crafted select value deletes a Steam row that /steam update would then have
+// to re-import.
+const SQL_REMOVE_USER_GAME = `
+  DELETE FROM user_games WHERE user_id = ? AND appid = ? AND playtime_tracked = 0
+`;
 
 export function removeUserGame(db: Database, userId: string, appid: number): boolean {
+  if (!Number.isInteger(appid)) return false;
   return prep(db, SQL_REMOVE_USER_GAME).run(userId, appid).changes > 0;
 }
 
