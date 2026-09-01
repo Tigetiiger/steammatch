@@ -63,7 +63,7 @@ global commands are eventually consistent. Leave it unset to deploy globally.
 All user-facing copy lives in `src/ui/embeds.ts`; that is the file to open to change wording.
 | `/games list [min_playtime] [public]` | Your library, filterable and paginated |
 | `/games shared <user> [min_playtime]` | What you and one other person both play |
-| `/games who <game> [min_playtime]` | Who else in this server plays it |
+| `/games who <game> [min_playtime]` | Who else in this server plays it. **Pingi neid** notifies them; **Kopeeri pingid** hands you the mention list privately, to paste wherever you like |
 | `/games leaderboard [user] [min_playtime]` | The server's most commonly owned games. `user:@someone` switches to **their** point of view: their games, ranked by how many people here share them |
 | `/match [min_playtime] [sort]` | Members ranked by overlap with you |
 | `/privacy` | Hide yourself, or delete everything |

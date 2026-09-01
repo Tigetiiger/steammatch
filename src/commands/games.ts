@@ -30,6 +30,7 @@ import {
   leaderboardEmbed,
   libraryEmbed,
   noticeEmbed,
+  pingCopyMessage,
   notLinkedEmbed,
   profileStateEmbed,
   retryRow,
@@ -492,6 +493,23 @@ async function whoSub(interaction: Inter, ctx: Ctx, min: Minutes): Promise<void>
   });
   collector.on('collect', (i) => {
     void (async () => {
+      // Copy is open to anyone who can see the message: it hands back exactly
+      // what is already on their screen, privately, and pings nobody. Ping is
+      // not -- it notifies up to 25 people, so it stays with whoever ran the
+      // command rather than being a button any passer-by can fire.
+      if (i.customId.endsWith(':copy')) {
+        await i
+          .reply({
+            content: pingCopyMessage(gameName(meta.name, 80), owners.map((o) => o.userId)),
+            // Belt and braces. The mentions are inside a code block and inert
+            // already; this makes a stray backtick in a game name unable to
+            // turn the block into a live ping of everybody in it.
+            allowedMentions: { parse: [] },
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
+        return;
+      }
       if (i.user.id !== interaction.user.id) {
         await i
           .reply({

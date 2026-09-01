@@ -414,13 +414,16 @@ describe('manual games are reachable from /games who', () => {
     expect(who.url).toBeUndefined();
     expect(who.title).toBe('Minecraft');
 
+    // Every button is one of ours -- no link component, which is the point here.
+    // Counting them would break every time a button is added, which says nothing
+    // about store pages.
     const row = e.whoRow('abc12345', 1, null).toJSON();
-    expect(row.components).toHaveLength(1);
     expect(row.components.every((c) => 'custom_id' in c)).toBe(true);
+    expect(row.components.some((c) => 'url' in c)).toBe(false);
 
-    // A Steam game still gets the button.
+    // A Steam game still gets the link.
     const steamRow = e.whoRow('abc12345', 1, 'https://store.steampowered.com/app/440').toJSON();
-    expect(steamRow.components).toHaveLength(2);
+    expect(steamRow.components.some((c) => 'url' in c)).toBe(true);
   });
 
   it('never emits an empty action row, which Discord rejects', async () => {

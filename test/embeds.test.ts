@@ -20,6 +20,8 @@ import {
   sharedEmbed,
   truncate,
   whoEmbed,
+  pingCopyMessage,
+  whoRow,
 } from '../src/ui/embeds.js';
 import type { GameRow, LeaderRow, MatchRow, ProfileState, SharedRow } from '../src/types.js';
 
@@ -384,5 +386,61 @@ describe('profileStateMessage', () => {
     const m = profileStateMessage('game_details_private', null, 600);
     expect(m.description).not.toContain('10,0 h');
     expect(m.description).toContain('Game details');
+  });
+});
+
+describe('the copy-me ping list', () => {
+  const ids = ['688340400100081874', '318220364795248640', '204558623017533440'];
+
+  it('puts the mentions in a code block, and nothing else in it', () => {
+    const out = pingCopyMessage('Counter-Strike 2', ids);
+    const block = out.split('```')[1]!.trim();
+    // Exactly the mentions, space separated -- anything else in the block gets
+    // copied along with them and has to be deleted by hand.
+    expect(block).toBe(ids.map((id) => `<@${id}>`).join(' '));
+    expect(out).toContain('Counter-Strike 2');
+    // The game name is context, so it sits OUTSIDE the fence.
+    expect(block).not.toContain('Counter-Strike');
+  });
+
+  it('emits real mention syntax, so pasting it produces working pings', () => {
+    expect(pingCopyMessage('x', ['123'])).toContain('<@123>');
+  });
+
+  it('fits a full owner list into one message', () => {
+    const many = Array.from({ length: 25 }, (_, i) => String(100000000000000000n + BigInt(i)));
+    expect(pingCopyMessage('Space Engineers 2', many).length).toBeLessThanOrEqual(2000);
+  });
+
+  it('drops the overflow rather than exceeding the limit, and says how many', () => {
+    const lots = Array.from({ length: 200 }, (_, i) => String(100000000000000000n + BigInt(i)));
+    const out = pingCopyMessage('Among Us', lots);
+    expect(out.length).toBeLessThanOrEqual(2000);
+    expect(out).toMatch(/\d+ ei mahtunud ära/);
+  });
+
+  it('offers the copy button whenever there is anybody to copy', () => {
+    const labels = (count: number, store: string | null) =>
+      whoRow('abc123', count, store)
+        .toJSON()
+        .components.map((c) => ('label' in c ? c.label : null));
+
+    expect(labels(3, 'https://store.steampowered.com/app/730')).toEqual([
+      'Pingi neid 3',
+      'Kopeeri pingid',
+      'Poe leht ↗',
+    ]);
+    // A hand-added game has no store page, but still has people in it.
+    expect(labels(2, null)).toEqual(['Pingi neid 2', 'Kopeeri pingid']);
+    // Nobody to ping and nowhere to link: Discord rejects an empty action row.
+    expect(whoRow('abc123', 0, null).toJSON().components).toHaveLength(0);
+  });
+
+  it('keeps the copy button on its own custom id, so the router can tell them apart', () => {
+    const ids2 = whoRow('abc123', 1, null)
+      .toJSON()
+      .components.map((c) => ('custom_id' in c ? c.custom_id : null));
+    expect(ids2).toContain('px:abc123:ping');
+    expect(ids2).toContain('px:abc123:copy');
   });
 });

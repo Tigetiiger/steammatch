@@ -608,6 +608,39 @@ export function whoEmbed(v: WhoView): EmbedBuilder {
     .setThumbnail(v.iconUrl);
 }
 
+/** Discord's hard message-content limit; the copy block has to fit inside one. */
+const MESSAGE_LIMIT = 2000;
+
+/**
+ * The copy-me block of raw mentions.
+ *
+ * Fenced, for two reasons. Discord puts a copy button on a code block, and text
+ * inside one is inert -- `<@123>` shows as itself and pings nobody, so opening
+ * this cannot spray notifications at everyone listed. Pasting it into a normal
+ * message turns each back into a real mention.
+ *
+ * The block holds ONLY the mentions. Anything else in there -- a game name, a
+ * "who's playing?" -- would be copied along with them and have to be deleted by
+ * hand, so the context goes above it instead.
+ */
+export function pingCopyMessage(gameName: string, userIds: readonly string[]): string {
+  const intro = `Kopeeri ja kleebi sinna, kuhu soovid — **${gameName}**`;
+  const mentions: string[] = [];
+  let used = intro.length + 12; // the fences, the newlines and a little slack
+  let dropped = 0;
+  for (const id of userIds) {
+    const piece = `<@${id}> `;
+    if (used + piece.length > MESSAGE_LIMIT - 60) {
+      dropped++;
+      continue;
+    }
+    mentions.push(`<@${id}>`);
+    used += piece.length;
+  }
+  const tail = dropped > 0 ? `\n-# ${num(dropped)} ei mahtunud ära` : '';
+  return `${intro}\n\`\`\`\n${mentions.join(' ')}\n\`\`\`${tail}`;
+}
+
 export function whoRow(
   sessionId: string,
   count: number,
@@ -621,6 +654,14 @@ export function whoRow(
         .setCustomId(`px:${sessionId}:ping`)
         .setStyle(ButtonStyle.Primary)
         .setLabel(truncate(count === 1 ? 'Pingi teda' : `Pingi neid ${count}`, LIMITS.buttonLabel)),
+    );
+  }
+  if (count > 0) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`px:${sessionId}:copy`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel('Kopeeri pingid'),
     );
   }
   if (storeUrl !== null) {
